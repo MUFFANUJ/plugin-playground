@@ -1,20 +1,41 @@
 import { Dialog, ReactWidget, showDialog } from '@jupyterlab/apputils';
 
+import { codeIcon, markdownIcon } from '@jupyterlab/ui-components';
+
 import * as React from 'react';
 
 import { Message } from '@lumino/messaging';
+import { normalizeQuery } from './contents';
 
 export namespace ExampleSidebar {
   export interface IExampleRecord {
     name: string;
     path: string;
+    readmePath: string;
     description: string;
   }
 
   export interface IOptions {
     fetchExamples: () => Promise<ReadonlyArray<IExampleRecord>>;
     onOpenExample: (examplePath: string) => Promise<void> | void;
+    onOpenReadme: (readmePath: string) => Promise<void> | void;
   }
+}
+
+export function filterExampleRecords(
+  examples: ReadonlyArray<ExampleSidebar.IExampleRecord>,
+  query: string
+): ReadonlyArray<ExampleSidebar.IExampleRecord> {
+  const normalizedQuery = normalizeQuery(query);
+  if (!normalizedQuery) {
+    return examples;
+  }
+  return examples.filter(example => {
+    return (
+      example.name.toLowerCase().includes(normalizedQuery) ||
+      example.description.toLowerCase().includes(normalizedQuery)
+    );
+  });
 }
 
 export class ExampleSidebar extends ReactWidget {
@@ -22,8 +43,8 @@ export class ExampleSidebar extends ReactWidget {
     super();
     this._fetchExamples = options.fetchExamples;
     this._onOpenExample = options.onOpenExample;
+    this._onOpenReadme = options.onOpenReadme;
     this.addClass('jp-PluginPlayground-sidebar');
-    this.addClass('jp-PluginPlayground-exampleSidebar');
   }
 
   protected onAfterAttach(msg: Message): void {
@@ -32,32 +53,24 @@ export class ExampleSidebar extends ReactWidget {
   }
 
   render(): JSX.Element {
-    const query = this._query.trim().toLowerCase();
-    const filteredExamples =
-      query.length > 0
-        ? this._examples.filter(example => {
-            return (
-              example.name.toLowerCase().includes(query) ||
-              example.description.toLowerCase().includes(query)
-            );
-          })
-        : this._examples;
+    const filteredExamples = filterExampleRecords(this._examples, this._query);
 
     return (
-      <div className="jp-PluginPlayground-sidebarInner jp-PluginPlayground-exampleSidebarInner">
+      <div className="jp-PluginPlayground-sidebarInner">
         <input
-          className="jp-PluginPlayground-filter jp-PluginPlayground-exampleFilter"
+          className="jp-PluginPlayground-filter"
           type="search"
           placeholder="Filter extension examples"
+          aria-label="Filter extension examples"
           value={this._query}
           onChange={this._onQueryChange}
         />
-        <p className="jp-PluginPlayground-count jp-PluginPlayground-exampleCount">
+        <p className="jp-PluginPlayground-count">
           {filteredExamples.length} of {this._examples.length} extension
           examples
         </p>
         {this._isLoading ? (
-          <p className="jp-PluginPlayground-count jp-PluginPlayground-exampleCount">
+          <p className="jp-PluginPlayground-count">
             Loading extension examples…
           </p>
         ) : null}
@@ -69,16 +82,16 @@ export class ExampleSidebar extends ReactWidget {
         {!this._isLoading &&
         !this._errorMessage &&
         filteredExamples.length === 0 ? (
-          <div className="jp-PluginPlayground-emptyState">
-            <p className="jp-PluginPlayground-count jp-PluginPlayground-exampleCount">
+          <div>
+            <p className="jp-PluginPlayground-count">
               No extension examples found in <code>extension-examples/</code>.
             </p>
-            <p className="jp-PluginPlayground-count jp-PluginPlayground-exampleCount">
+            <p className="jp-PluginPlayground-count">
               If this repository was cloned from source, run{' '}
               <code>git submodule update --init --recursive</code> from the
               project root.
             </p>
-            <p className="jp-PluginPlayground-count jp-PluginPlayground-exampleCount">
+            <p className="jp-PluginPlayground-count">
               If installed from PyPI, clone{' '}
               <code>https://github.com/jupyterlab/extension-examples</code> as{' '}
               <code>extension-examples/</code> in your working directory and
@@ -87,29 +100,53 @@ export class ExampleSidebar extends ReactWidget {
           </div>
         ) : null}
         {filteredExamples.length > 0 ? (
-          <ul className="jp-PluginPlayground-list jp-PluginPlayground-exampleList">
+          <ul className="jp-PluginPlayground-list">
             {filteredExamples.map(example => (
-              <li
-                key={example.path}
-                className="jp-PluginPlayground-listItem jp-PluginPlayground-exampleListItem"
-              >
-                <div className="jp-PluginPlayground-row jp-PluginPlayground-exampleRow">
-                  <span className="jp-PluginPlayground-entryLabel jp-PluginPlayground-exampleName">
+              <li key={example.path} className="jp-PluginPlayground-listItem">
+                <div className="jp-PluginPlayground-row">
+                  <span className="jp-PluginPlayground-entryLabel">
                     {example.name}
                   </span>
-                  <button
-                    className="jp-Button jp-mod-styled jp-mod-minimal jp-PluginPlayground-actionButton jp-PluginPlayground-exampleOpenButton"
-                    type="button"
-                    aria-label={`Open example ${example.name}`}
-                    title="Open example file"
-                    onClick={() => {
-                      void this._openExample(example);
-                    }}
-                  >
-                    Open
-                  </button>
+                  <div className="jp-PluginPlayground-tokenActions">
+                    <button
+                      className="jp-Button jp-mod-styled jp-mod-minimal jp-PluginPlayground-actionButton jp-PluginPlayground-exampleOpenButton"
+                      type="button"
+                      aria-label={`Open source for ${example.name}`}
+                      title="Open example source file"
+                      onClick={() => {
+                        void this._openExample(example);
+                      }}
+                    >
+                      {React.createElement(codeIcon.react, {
+                        tag: 'span',
+                        elementSize: 'normal',
+                        className: 'jp-PluginPlayground-actionIcon'
+                      })}
+                      <span className="jp-PluginPlayground-actionLabel">
+                        Code
+                      </span>
+                    </button>
+                    <button
+                      className="jp-Button jp-mod-styled jp-mod-minimal jp-PluginPlayground-actionButton jp-PluginPlayground-exampleReadmeButton"
+                      type="button"
+                      aria-label={`Open README for ${example.name}`}
+                      title="Open example README"
+                      onClick={() => {
+                        void this._openReadme(example);
+                      }}
+                    >
+                      {React.createElement(markdownIcon.react, {
+                        tag: 'span',
+                        elementSize: 'normal',
+                        className: 'jp-PluginPlayground-actionIcon'
+                      })}
+                      <span className="jp-PluginPlayground-actionLabel">
+                        README
+                      </span>
+                    </button>
+                  </div>
                 </div>
-                <p className="jp-PluginPlayground-description jp-PluginPlayground-exampleDescription">
+                <p className="jp-PluginPlayground-description">
                   {example.description}
                 </p>
               </li>
@@ -146,14 +183,36 @@ export class ExampleSidebar extends ReactWidget {
   private async _openExample(
     example: ExampleSidebar.IExampleRecord
   ): Promise<void> {
+    await this._openPath(
+      example.path,
+      this._onOpenExample,
+      'example source file'
+    );
+  }
+
+  private async _openReadme(
+    example: ExampleSidebar.IExampleRecord
+  ): Promise<void> {
+    await this._openPath(
+      example.readmePath,
+      this._onOpenReadme,
+      'example README'
+    );
+  }
+
+  private async _openPath(
+    path: string,
+    openPath: (path: string) => Promise<void> | void,
+    label: string
+  ): Promise<void> {
     try {
-      await this._onOpenExample(example.path);
+      await openPath(path);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown opening error';
       await showDialog({
-        title: 'Failed to open extension example',
-        body: `Could not open "${example.path}". ${message}`,
+        title: 'Failed to open extension example file',
+        body: `Could not open ${label} "${path}". ${message}`,
         buttons: [Dialog.okButton()]
       });
     }
@@ -165,6 +224,7 @@ export class ExampleSidebar extends ReactWidget {
   private readonly _onOpenExample: (
     examplePath: string
   ) => Promise<void> | void;
+  private readonly _onOpenReadme: (readmePath: string) => Promise<void> | void;
   private _query = '';
   private _examples: ReadonlyArray<ExampleSidebar.IExampleRecord> = [];
   private _isLoading = false;

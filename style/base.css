@@ -12,12 +12,51 @@
 
 .jp-PluginPlayground-sidebarInner {
   box-sizing: border-box;
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--jp-layout-spacing-standard);
   height: 100%;
   overflow: auto;
   padding: var(--jp-code-padding);
+}
+
+.jp-PluginPlayground-viewToggle {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 5px;
+}
+
+.jp-PluginPlayground-viewButton {
+  background: var(--jp-shortcuts-button-background);
+  border: var(--jp-border-width) solid var(--jp-shortcuts-button-background);
+  color: var(--jp-ui-font-color1);
+  justify-content: center;
+  width: 100%;
+}
+
+.jp-PluginPlayground-viewButton:hover {
+  background: var(--jp-shortcuts-button-hover-background);
+  border-color: var(--jp-shortcuts-button-hover-background);
+}
+
+.jp-PluginPlayground-viewButton.jp-mod-active {
+  background: var(--jp-brand-color1);
+  border-color: var(--jp-brand-color1);
+  color: var(--jp-ui-inverse-font-color1);
+}
+
+.jp-PluginPlayground-viewButton.jp-mod-active:hover {
+  background: var(--jp-brand-color1);
+  border-color: var(--jp-brand-color1);
+  color: var(--jp-ui-inverse-font-color1);
+}
+
+.jp-PluginPlayground-viewPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--jp-layout-spacing-standard);
 }
 
 .jp-PluginPlayground-count {
@@ -33,6 +72,7 @@
   color: var(--jp-ui-font-color1);
   font-size: var(--jp-ui-font-size1);
   padding: 4px 8px;
+  width: 100%;
 }
 
 .jp-PluginPlayground-list {
@@ -66,7 +106,9 @@
 
 .jp-PluginPlayground-tokenActions {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 4px;
+  justify-content: flex-end;
 }
 
 .jp-PluginPlayground-actionButton {
@@ -85,14 +127,54 @@
   justify-content: center;
 }
 
+.jp-PluginPlayground-argumentBadgeButton {
+  position: relative;
+}
+
+.jp-PluginPlayground-argumentFunctionLabel {
+  align-items: center;
+  display: inline-flex;
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1;
+}
+
 .jp-PluginPlayground-actionButton:hover {
   background: var(--jp-layout-color3);
 }
 
+.jp-PluginPlayground-argumentCountBadge {
+  background: var(--jp-brand-color1);
+  border-radius: 999px;
+  color: var(--jp-ui-inverse-font-color1);
+  display: inline-flex;
+  font-family: var(--jp-code-font-family);
+  font-size: 8px;
+  font-weight: 700;
+  justify-content: center;
+  line-height: 1;
+  min-width: 10px;
+  padding: 2px;
+  pointer-events: none;
+  text-align: center;
+}
+
+.jp-PluginPlayground-argumentBadgeButton:disabled {
+  opacity: 1;
+}
+
+.jp-PluginPlayground-argumentBadgeButton:disabled
+  .jp-PluginPlayground-argumentCountBadge {
+  background: var(--jp-layout-color3);
+  border: var(--jp-border-width) solid var(--jp-border-color2);
+  color: var(--jp-ui-font-color1);
+}
+
+.jp-PluginPlayground-viewButton:focus-visible,
 .jp-PluginPlayground-actionButton:focus-visible,
 .jp-PluginPlayground-filter:focus-visible {
   outline: var(--jp-border-width) solid var(--jp-brand-color1);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .jp-PluginPlayground-actionIcon {
@@ -109,6 +191,51 @@
   width: 14px;
 }
 
+.jp-PluginPlayground-actionLabel {
+  white-space: nowrap;
+}
+
+@container (max-width: 380px) {
+  .jp-PluginPlayground-packageActions .jp-PluginPlayground-actionLabel {
+    display: none;
+  }
+
+  .jp-PluginPlayground-packageActions .jp-PluginPlayground-actionButton {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+}
+
+@container (max-width: 300px) {
+  .jp-PluginPlayground-actionLabel {
+    display: none;
+  }
+
+  .jp-PluginPlayground-actionButton {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+}
+
+.jp-PluginPlayground-commandArguments {
+  margin-top: 8px;
+}
+
+.jp-PluginPlayground-commandArgumentsText {
+  background: var(--jp-layout-color2);
+  border: var(--jp-border-width) solid var(--jp-border-color2);
+  border-radius: var(--jp-border-radius);
+  color: var(--jp-ui-font-color1);
+  font-family: var(--jp-code-font-family);
+  font-size: var(--jp-code-font-size);
+  line-height: 1.4;
+  margin: 0;
+  overflow-x: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .jp-PluginPlayground-description {
   color: var(--jp-ui-font-color2);
   font-size: var(--jp-ui-font-size0);
@@ -120,6 +247,116 @@
   font-family: var(--jp-code-font-family);
 }
 
+.jp-PluginPlayground-packageName {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 .jp-PluginPlayground-exampleError {
   color: var(--jp-error-color1);
+}
+
+.jp-PluginPlayground-logBadgeBar {
+  align-items: center;
+  background: var(--jp-layout-color2);
+  border: var(--jp-border-width) solid var(--jp-border-color1);
+  border-radius: 4px;
+  bottom: 30px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  color: var(--jp-ui-font-color1);
+  display: flex;
+  font-size: var(--jp-ui-font-size1);
+  gap: 8px;
+  position: fixed;
+  right: 12px;
+  user-select: none;
+  z-index: 10000;
+}
+
+.jp-PluginPlayground-logBadgeBar-label {
+  cursor: pointer;
+  padding: 6px 4px 6px 12px;
+}
+
+.jp-PluginPlayground-logBadgeBar-label:hover {
+  text-decoration: underline;
+}
+
+.jp-PluginPlayground-logBadgeBar-close {
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  opacity: 0.6;
+  padding: 6px 10px 6px 0;
+}
+
+.jp-PluginPlayground-logBadgeBar-close:hover {
+  opacity: 1;
+}
+
+.jp-PluginPlayground-logBadgeBar-warning {
+  background: var(--jp-warn-color2, #fff3cd);
+  border-color: var(--jp-warn-color1);
+  color: var(--jp-warn-color0, #f1bd21);
+}
+
+.jp-PluginPlayground-logBadgeBar-error {
+  background: var(--jp-error-color3, #f8d7da);
+  border-color: var(--jp-error-color1);
+  color: var(--jp-error-color0, #721c24);
+}
+
+.jp-PluginPlayground-loadOnSaveWidget {
+  align-items: center;
+  display: inline-flex;
+}
+
+.jp-PluginPlayground-loadOnSaveToggle {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  margin: 0;
+  user-select: none;
+}
+
+.jp-PluginPlayground-loadOnSaveCheckbox {
+  margin: 0;
+}
+
+.jp-PluginPlayground-loadOnSaveText {
+  color: var(--jp-ui-font-color1);
+  font-size: var(--jp-ui-font-size0);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.jp-PluginPlayground-loadOnSaveCheckbox:disabled
+  + .jp-PluginPlayground-loadOnSaveText {
+  color: var(--jp-ui-font-color2);
+}
+
+.jp-Toolbar > .jp-Toolbar-item[data-jp-item-name='export-extension'] {
+  margin-left: auto;
+}
+
+@keyframes jp-PluginPlayground-lineChangePulse {
+  0% {
+    background-color: var(--jp-brand-color3);
+    box-shadow: inset 3px 0 0 0 var(--jp-brand-color1),
+      inset 0 0 0 1px var(--jp-brand-color2);
+  }
+  45% {
+    background-color: var(--jp-brand-color4, var(--jp-brand-color3));
+    box-shadow: inset 3px 0 0 0 var(--jp-brand-color2),
+      inset 0 0 0 1px var(--jp-brand-color3);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 0 transparent;
+  }
+}
+
+.jp-PluginPlayground-lineHighlight {
+  animation: jp-PluginPlayground-lineChangePulse 1200ms ease-out;
 }

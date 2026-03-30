@@ -20,7 +20,7 @@ This extension provides a new command, `Load Current File As Extension`, availab
 
 It also adds a single right sidebar panel with two collapsible sections:
 
-- **Service Tokens**: token string IDs you can use in plugin `requires` and `optional` arrays, with search, copy, and import actions.
+- **Extension Points**: token string IDs and command IDs, with a `Tokens` / `Commands` switch. Tokens support search, copy, and import actions. Commands support search and copy actions.
 - **Extension Examples**: discovered examples from a local checkout of [`jupyterlab/extension-examples`](https://github.com/jupyterlab/extension-examples), so you can open them directly from the panel.
 
 If examples are missing:
@@ -29,6 +29,8 @@ If examples are missing:
 - For PyPI installs: clone `https://github.com/jupyterlab/extension-examples` into an `extension-examples/` folder in your working directory.
 
 When reloading a plugin with the same `id`, the playground attempts to deactivate the previously loaded plugin first. Defining `deactivate()` in examples is recommended for clean reruns.
+
+When typing inside `commands.execute(` or `app.commands.execute(` in JavaScript and TypeScript editors, the completer will also suggest available command IDs.
 
 As an example, open the text editor by creating a new text file and paste this small JupyterLab plugin into it. This plugin will create a simple command `My Super Cool Toggle` in the command palette that can be toggled on and off.
 
@@ -114,6 +116,54 @@ To migrate to the ES6-compatible syntax:
 - add `export default plugin;` line,
 - convert `require()` calls to ES6 default imports.
 
+## AI Tooling (Lite + Binder)
+
+Plugin Playground supports AI-assisted extension prototyping in both JupyterLite and Binder deployments.
+
+- In JupyterLite, you can use browser-based AI chat and completions.
+- In Binder (JupyterLab), you can use the same JupyterLite AI tooling.
+
+### Quick Start
+
+1. Launch Plugin Playground in Lite or Binder.
+2. Open the AI settings panel.
+3. Add a provider and choose a model.
+4. Enter your provider API key and save.
+5. Ask the assistant to draft or refine plugin code, then run `Load Current File As Extension`.
+
+### Provider Setup Help
+
+- [JupyterLite AI documentation](https://jupyterlite-ai.readthedocs.io/en/latest/)
+- [Plugin authoring skill for agents](_agents/skills/plugin-authoring/SKILL.md)
+
+### Commands for AI Agents and Automation
+
+Plugin Playground now exposes command APIs that mirror sidebar data and support optional `query` filtering:
+
+- `plugin-playground:list-tokens`
+- `plugin-playground:list-commands`
+- `plugin-playground:list-extension-examples`
+- `plugin-playground:export-as-extension` (supports optional `{ path: string }`)
+
+Example:
+
+```typescript
+await app.commands.execute('plugin-playground:list-tokens', {
+  query: 'notebook'
+});
+
+await app.commands.execute('plugin-playground:export-as-extension', {
+  path: 'my-extension/src/index.ts'
+});
+```
+
+Each command returns a JSON object with:
+
+- `query`: the filter text that was applied
+- `total`: total number of available records
+- `count`: number of records returned after filtering
+- `items`: matching records
+
 ## Advanced Settings
 
 The Advanced Settings for the Plugin Playground enable you to configure plugins to load every time JupyterLab starts up. Automatically loaded plugins can be configured in two ways:
@@ -150,6 +200,26 @@ jupyter labextension develop . --overwrite
 # Rebuild extension Typescript source after making changes
 jlpm run build
 ```
+
+### Pre-commit hooks
+
+Install and enable hooks:
+
+```bash
+python -m pip install pre-commit
+pre-commit install
+```
+
+Run all configured hooks once after setup:
+
+```bash
+pre-commit run --all-files
+```
+
+Useful commands:
+
+- `pre-commit run --files <path ...>`: run hooks for specific files only.
+- `pre-commit autoupdate`: update pinned hook versions.
 
 You can watch the source directory and run JupyterLab at the same time in different terminals to watch for changes in the extension's source and automatically rebuild the extension.
 

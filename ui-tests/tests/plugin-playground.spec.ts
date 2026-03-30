@@ -1,16 +1,26 @@
-import { expect, test } from '@jupyterlab/galata';
+import { expect, galata, test } from '@jupyterlab/galata';
 import type { FileEditorWidget } from '@jupyterlab/fileeditor';
 import type { IJupyterLabPageFixture } from '@jupyterlab/galata';
 import type { Locator } from '@playwright/test';
 
 const LOAD_COMMAND = 'plugin-playground:load-as-extension';
+const EXPORT_COMMAND = 'plugin-playground:export-as-extension';
+const OPEN_PACKAGES_REFERENCE_COMMAND = 'plugin-playground:open-js-explorer';
+const INTERNAL_CONTEXT_INFO_COMMAND = '__internal:context-menu-info';
 const CREATE_FILE_COMMAND = 'plugin-playground:create-new-plugin';
+const PLAYGROUND_PLUGIN_ID = '@jupyterlab/plugin-playground:plugin';
+const LIST_TOKENS_COMMAND = 'plugin-playground:list-tokens';
+const LIST_COMMANDS_COMMAND = 'plugin-playground:list-commands';
+const LIST_EXAMPLES_COMMAND = 'plugin-playground:list-extension-examples';
 const TEST_PLUGIN_ID = 'playground-integration-test:plugin';
 const TEST_TOGGLE_COMMAND = 'playground-integration-test:toggle';
 const TEST_FILE = 'playground-integration-test.ts';
+const COMMAND_COMPLETION_FILE = 'command-completion.ts';
+const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
+const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Auto Load on Save';
 
 test.use({ autoGoto: false });
 
@@ -75,6 +85,32 @@ async function findImportableToken(panel: Locator): Promise<string> {
   throw new Error('No importable token found in token sidebar');
 }
 
+function parameterNameFromToken(tokenSymbol: string): string {
+  const base = /^I[A-Z]/.test(tokenSymbol) ? tokenSymbol.slice(1) : tokenSymbol;
+  return `${base.charAt(0).toLowerCase()}${base.slice(1)}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function findLoadOnSaveCheckbox(
+  page: IJupyterLabPageFixture
+): Promise<Locator> {
+  const checkbox = page.getByRole('checkbox', {
+    name: LOAD_ON_SAVE_CHECKBOX_LABEL
+  });
+  await expect(checkbox).toBeVisible();
+  return checkbox;
+}
+
+async function focusActiveEditor(page: IJupyterLabPageFixture): Promise<void> {
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    current.content.editor.focus();
+  });
+}
+
 test('registers plugin playground commands', async ({ page }) => {
   await page.goto();
 
@@ -89,6 +125,26 @@ test('registers plugin playground commands', async ({ page }) => {
       return window.jupyterapp.commands.hasCommand(id);
     }, CREATE_FILE_COMMAND)
   );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, EXPORT_COMMAND)
+  );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_TOKENS_COMMAND)
+  );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_COMMANDS_COMMAND)
+  );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_EXAMPLES_COMMAND)
+  );
 
   await expect(
     page.evaluate((id: string) => {
@@ -101,12 +157,33 @@ test('registers plugin playground commands', async ({ page }) => {
       return window.jupyterapp.commands.hasCommand(id);
     }, CREATE_FILE_COMMAND)
   ).resolves.toBe(true);
+  await expect(
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, EXPORT_COMMAND)
+  ).resolves.toBe(true);
+  await expect(
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_TOKENS_COMMAND)
+  ).resolves.toBe(true);
+  await expect(
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_COMMANDS_COMMAND)
+  ).resolves.toBe(true);
+  await expect(
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_EXAMPLES_COMMAND)
+  ).resolves.toBe(true);
 });
 
 test('opens a dummy extension example from the sidebar', async ({ page }) => {
   const integrationExampleName = 'integration-example';
   const integrationExampleRoot = `extension-examples/${integrationExampleName}`;
   const expectedPath = `${integrationExampleRoot}/src/index.ts`;
+  const expectedReadmePath = `${integrationExampleRoot}/README.md`;
 
   await page.contents.uploadContent(
     JSON.stringify(
@@ -125,8 +202,30 @@ test('opens a dummy extension example from the sidebar', async ({ page }) => {
     'text',
     expectedPath
   );
+  await page.contents.uploadContent(
+    '# Integration Example\n\nThis README explains the example.\n',
+    'text',
+    expectedReadmePath
+  );
 
   await page.goto();
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_EXAMPLES_COMMAND)
+  );
+  const examplesResult = await page.evaluate(
+    ({ id, query }) => {
+      return window.jupyterapp.commands.execute(id, { query });
+    },
+    {
+      id: LIST_EXAMPLES_COMMAND,
+      query: integrationExampleName
+    }
+  );
+  expect(examplesResult.count).toBe(1);
+  expect(examplesResult.items[0].path).toBe(expectedPath);
+
   const section = await openSidebarPanel(page, EXAMPLE_SECTION_ID);
 
   const filterInput = section.getByPlaceholder('Filter extension examples');
@@ -147,6 +246,120 @@ test('opens a dummy extension example from the sidebar', async ({ page }) => {
     const path = current?.context?.path;
     return path === pathToOpen;
   }, expectedPath);
+
+  const readmeButton = exampleItems
+    .first()
+    .locator('.jp-PluginPlayground-exampleReadmeButton');
+  await expect(readmeButton).toBeVisible();
+  await readmeButton.click();
+
+  await page.waitForFunction((pathToOpen: string) => {
+    const current = window.jupyterapp.shell
+      .currentWidget as FileEditorWidget | null;
+    const path = current?.context?.path;
+    return path === pathToOpen;
+  }, expectedReadmePath);
+});
+
+test('creates a plugin file with an explicit path argument', async ({
+  page,
+  tmpPath
+}) => {
+  const requestedPath = `/${tmpPath}/named-by-command`;
+  const expectedPath = `${tmpPath}/named-by-command.ts`;
+
+  try {
+    await page.goto();
+    await page.waitForCondition(() =>
+      page.evaluate((id: string) => {
+        return window.jupyterapp.commands.hasCommand(id);
+      }, CREATE_FILE_COMMAND)
+    );
+
+    const openPath = await page.evaluate(
+      async ({ id, path }) => {
+        await window.jupyterapp.commands.execute(id, { path });
+        const current = window.jupyterapp.shell
+          .currentWidget as FileEditorWidget | null;
+        return current?.context?.path ?? null;
+      },
+      {
+        id: CREATE_FILE_COMMAND,
+        path: requestedPath
+      }
+    );
+    expect(openPath).toBe(expectedPath);
+  } finally {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  }
+});
+
+test('lists tokens and searches commands via command APIs', async ({
+  page
+}) => {
+  await page.goto();
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_TOKENS_COMMAND)
+  );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LIST_COMMANDS_COMMAND)
+  );
+
+  const tokensResult = await page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id);
+  }, LIST_TOKENS_COMMAND);
+  expect(tokensResult.count).toBeGreaterThan(0);
+  expect(tokensResult.total).toBeGreaterThan(0);
+  expect(typeof tokensResult.items[0].name).toBe('string');
+
+  const commandsResult = await page.evaluate(
+    ({ id, query }) => {
+      return window.jupyterapp.commands.execute(id, { query });
+    },
+    {
+      id: LIST_COMMANDS_COMMAND,
+      query: LOAD_COMMAND
+    }
+  );
+  expect(commandsResult.count).toBeGreaterThan(0);
+  expect(
+    commandsResult.items.some(
+      (item: { id: string }) => item.id === LOAD_COMMAND
+    )
+  ).toBe(true);
+});
+
+test('open packages reference command switches to packages view', async ({
+  page
+}) => {
+  await page.goto();
+
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, OPEN_PACKAGES_REFERENCE_COMMAND)
+  );
+
+  await page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id);
+  }, OPEN_PACKAGES_REFERENCE_COMMAND);
+
+  const section = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  const packagesTab = section.getByRole('tab', { name: 'Packages' });
+  await expect(packagesTab).toHaveAttribute('aria-selected', 'true');
+
+  const count = section.locator('.jp-PluginPlayground-count').first();
+  await expect(count).toContainText('packages');
+
+  const packageItems = section.locator('.jp-PluginPlayground-listItem');
+  await expect(packageItems.first()).toBeVisible();
+  await expect(
+    packageItems.first().locator('.jp-PluginPlayground-actionButton').first()
+  ).toBeVisible();
 });
 
 test('loads current editor file as a plugin extension', async ({
@@ -166,9 +379,12 @@ test('loads current editor file as a plugin extension', async ({
       return window.jupyterapp.commands.hasCommand(id);
     }, LOAD_COMMAND)
   );
-  await page.evaluate((id: string) => {
+  const loadResult = await page.evaluate((id: string) => {
     return window.jupyterapp.commands.execute(id);
   }, LOAD_COMMAND);
+  expect(loadResult.ok).toBe(true);
+  expect(loadResult.status).toBe('loaded');
+  expect(loadResult.pluginIds).toContain(TEST_PLUGIN_ID);
 
   await page.waitForCondition(() =>
     page.evaluate((id: string) => {
@@ -201,6 +417,65 @@ test('loads current editor file as a plugin extension', async ({
       return window.jupyterapp.commands.isToggled(id);
     }, TEST_TOGGLE_COMMAND)
   ).resolves.toBe(true);
+});
+
+test('exports active extension folder as a zip archive', async ({
+  page,
+  tmpPath
+}) => {
+  const projectRoot = `${tmpPath}/export-command-test`;
+  const sourcePath = `${projectRoot}/src/index.ts`;
+  const packageJsonPath = `${projectRoot}/package.json`;
+
+  await page.contents.uploadContent(
+    JSON.stringify(
+      {
+        name: 'export-command-test',
+        version: '0.1.0',
+        jupyterlab: { extension: true }
+      },
+      null,
+      2
+    ),
+    'text',
+    packageJsonPath
+  );
+  await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+  await page.goto();
+
+  await page.filebrowser.open(sourcePath);
+  expect(await page.activity.activateTab('index.ts')).toBe(true);
+
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, EXPORT_COMMAND)
+  );
+
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__exportDownloadCount = 0;
+    if (!w.__originalCreateObjectURL) {
+      w.__originalCreateObjectURL = URL.createObjectURL.bind(URL);
+      URL.createObjectURL = ((blob: Blob) => {
+        w.__exportDownloadCount += 1;
+        return w.__originalCreateObjectURL(blob);
+      }) as typeof URL.createObjectURL;
+    }
+  });
+
+  const exportResult = await page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id);
+  }, EXPORT_COMMAND);
+
+  expect(exportResult.ok).toBe(true);
+  expect(exportResult.archiveName).toBe('export-command-test.zip');
+  expect(exportResult.fileCount).toBeGreaterThanOrEqual(2);
+
+  const downloadCount = await page.evaluate(() => {
+    return (window as any).__exportDownloadCount ?? 0;
+  });
+  expect(downloadCount).toBeGreaterThan(0);
 });
 
 test('opens token sidebar, shows tokens, and filters by exact token', async ({
@@ -248,7 +523,18 @@ test('token sidebar inserts import statement into active editor', async ({
   const editorPath = `${tmpPath}/token-sidebar-import.ts`;
 
   await page.contents.uploadContent(
-    "const pluginId = 'token-sidebar-test';\n",
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const plugin: JupyterFrontEndPlugin<void> = {
+  id: 'token-sidebar-test:plugin',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd) => {
+    void app;
+  }
+};
+
+export default plugin;
+`,
     'text',
     editorPath
   );
@@ -274,25 +560,579 @@ test('token sidebar inserts import statement into active editor', async ({
   const packageName = tokenName.slice(0, separatorIndex).trim();
   const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
   const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
+  const expectedDependency = `requires: [${tokenSymbol}]`;
+  const expectedParameterName = parameterNameFromToken(tokenSymbol);
+  const expectedTokenPattern = escapeRegExp(tokenSymbol);
+  const expectedParameterPattern = escapeRegExp(expectedParameterName);
 
-  await page.waitForFunction((expected: string) => {
-    const current = window.jupyterapp.shell
-      .currentWidget as FileEditorWidget | null;
-    const source = current?.content.model.sharedModel.getSource();
-    if (typeof source !== 'string') {
-      return false;
+  await page.waitForFunction(
+    ({
+      expectedImportStatement,
+      expectedDependencyStatement,
+      expectedToken,
+      expectedParameter
+    }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      const source = current?.content.model.sharedModel.getSource();
+      if (typeof source !== 'string') {
+        return false;
+      }
+      const activatePattern = new RegExp(
+        `activate:\\s*\\(app:\\s*JupyterFrontEnd,\\s*${expectedParameter}\\s*:\\s*${expectedToken}\\)`
+      );
+      return (
+        source.startsWith(expectedImportStatement) &&
+        source.includes(expectedDependencyStatement) &&
+        activatePattern.test(source)
+      );
+    },
+    {
+      expectedImportStatement: expectedImport,
+      expectedDependencyStatement: expectedDependency,
+      expectedToken: expectedTokenPattern,
+      expectedParameter: expectedParameterPattern
     }
-    return source.startsWith(expected);
-  }, expectedImport);
+  );
 
+  await page.waitForFunction(() => {
+    const highlightedLines = document.querySelectorAll(
+      '.jp-FileEditor .jp-PluginPlayground-lineHighlight'
+    ).length;
+    return highlightedLines === 0;
+  });
   await importButton.click();
-  await page.waitForFunction((expected: string) => {
-    const current = window.jupyterapp.shell
-      .currentWidget as FileEditorWidget | null;
-    const source = current?.content.model.sharedModel.getSource();
-    if (typeof source !== 'string') {
-      return false;
+  await page.waitForFunction(
+    ({ expectedImportStatement, expectedDependencyStatement }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      const source = current?.content.model.sharedModel.getSource();
+      if (typeof source !== 'string') {
+        return false;
+      }
+      const highlightedLines = document.querySelectorAll(
+        '.jp-FileEditor .jp-PluginPlayground-lineHighlight'
+      ).length;
+      return (
+        source.split(expectedImportStatement).length - 1 === 1 &&
+        source.split(expectedDependencyStatement).length - 1 === 1 &&
+        highlightedLines >= 2
+      );
+    },
+    {
+      expectedImportStatement: expectedImport,
+      expectedDependencyStatement: expectedDependency
     }
-    return source.split(expected).length - 1 === 1;
-  }, expectedImport);
+  );
+});
+
+test('token sidebar inserts canonical token import when alias import exists', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/token-sidebar-alias-import.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const plugin: JupyterFrontEndPlugin<void> = {
+  id: 'token-sidebar-alias-test:plugin',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd) => {
+    void app;
+  }
+};
+
+export default plugin;
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(await page.activity.activateTab('token-sidebar-alias-import.ts')).toBe(
+    true
+  );
+
+  const section = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  const tokenName = await findImportableToken(section);
+  const filterInput = section.getByPlaceholder('Filter token strings');
+  await filterInput.fill(tokenName);
+  const tokenListItem = section.locator('.jp-PluginPlayground-listItem');
+  await expect(tokenListItem).toHaveCount(1);
+
+  const separatorIndex = tokenName.indexOf(':');
+  const packageName = tokenName.slice(0, separatorIndex).trim();
+  const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
+
+  await page.evaluate(
+    ({ packageName: pkg, symbol }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      if (!current) {
+        return;
+      }
+      const model = current.content.model.sharedModel;
+      const currentSource = model.getSource();
+      model.setSource(
+        `import { ${symbol} as existingAlias } from '${pkg}';\n${currentSource}`
+      );
+    },
+    { packageName, symbol: tokenSymbol }
+  );
+
+  const importButton = tokenListItem.locator(
+    '.jp-PluginPlayground-importButton'
+  );
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+
+  const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
+  const aliasImport = `import { ${tokenSymbol} as existingAlias } from '${packageName}';`;
+  const expectedDependency = `requires: [${tokenSymbol}]`;
+  await page.waitForFunction(
+    ({
+      expectedImportStatement,
+      aliasImportStatement,
+      expectedDependencyStatement
+    }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      const source = current?.content.model.sharedModel.getSource();
+      if (typeof source !== 'string') {
+        return false;
+      }
+      return (
+        source.startsWith(expectedImportStatement) &&
+        source.includes(aliasImportStatement) &&
+        source.includes(expectedDependencyStatement)
+      );
+    },
+    {
+      expectedImportStatement: expectedImport,
+      aliasImportStatement: aliasImport,
+      expectedDependencyStatement: expectedDependency
+    }
+  );
+});
+
+test('token sidebar briefly highlights changed lines after insertion', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/token-sidebar-highlight.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const plugin: JupyterFrontEndPlugin<void> = {
+  id: 'token-sidebar-highlight-test:plugin',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd) => {
+    void app;
+  }
+};
+
+export default plugin;
+`,
+    'text',
+    editorPath
+  );
+
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(await page.activity.activateTab('token-sidebar-highlight.ts')).toBe(
+    true
+  );
+
+  const section = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  const tokenName = await findImportableToken(section);
+  const filterInput = section.getByPlaceholder('Filter token strings');
+  await filterInput.fill(tokenName);
+  const tokenListItem = section.locator('.jp-PluginPlayground-listItem');
+  await expect(tokenListItem).toHaveCount(1);
+
+  const importButton = tokenListItem.locator(
+    '.jp-PluginPlayground-importButton'
+  );
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+
+  const separatorIndex = tokenName.indexOf(':');
+  const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
+  const expectedParameterName = parameterNameFromToken(tokenSymbol);
+
+  await page.waitForFunction(
+    ({ expectedToken, expectedParameter }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      const source = current?.content.model.sharedModel.getSource();
+      if (typeof source !== 'string') {
+        return false;
+      }
+      const activatePattern = new RegExp(
+        `activate:\\s*\\(app:\\s*JupyterFrontEnd,\\s*${expectedParameter}\\s*:\\s*${expectedToken}\\)`
+      );
+      const highlightedLines = document.querySelectorAll(
+        '.jp-FileEditor .jp-PluginPlayground-lineHighlight'
+      ).length;
+      return activatePattern.test(source) && highlightedLines >= 2;
+    },
+    {
+      expectedToken: escapeRegExp(tokenSymbol),
+      expectedParameter: escapeRegExp(expectedParameterName)
+    }
+  );
+});
+
+test('token sidebar avoids dependency edits for non-array requires property', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/token-sidebar-non-array-requires.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const requiredServices: unknown[] = [];
+const plugin: JupyterFrontEndPlugin<void> = {
+  id: 'token-sidebar-non-array-test:plugin',
+  autoStart: true,
+  requires: requiredServices,
+  activate: (app: JupyterFrontEnd) => {
+    void app;
+  }
+};
+
+export default plugin;
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(
+    await page.activity.activateTab('token-sidebar-non-array-requires.ts')
+  ).toBe(true);
+
+  const section = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  const tokenName = await findImportableToken(section);
+  const filterInput = section.getByPlaceholder('Filter token strings');
+  await filterInput.fill(tokenName);
+  const tokenListItem = section.locator('.jp-PluginPlayground-listItem');
+  await expect(tokenListItem).toHaveCount(1);
+
+  const importButton = tokenListItem.locator(
+    '.jp-PluginPlayground-importButton'
+  );
+  await expect(importButton).toBeEnabled();
+  await importButton.click();
+
+  const separatorIndex = tokenName.indexOf(':');
+  const packageName = tokenName.slice(0, separatorIndex).trim();
+  const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
+  const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
+
+  await page.waitForFunction(
+    ({ expectedImportStatement, token }) => {
+      const current = window.jupyterapp.shell
+        .currentWidget as FileEditorWidget | null;
+      const source = current?.content.model.sharedModel.getSource();
+      if (typeof source !== 'string') {
+        return false;
+      }
+      return (
+        source.startsWith(expectedImportStatement) &&
+        source.includes('requires: requiredServices') &&
+        source.split('requires:').length - 1 === 1 &&
+        !source.includes(`requires: [${token}]`) &&
+        /activate:\s*\(app:\s*JupyterFrontEnd\)/.test(source)
+      );
+    },
+    {
+      expectedImportStatement: expectedImport,
+      token: tokenSymbol
+    }
+  );
+});
+
+test('commands tab lists and filters available commands', async ({ page }) => {
+  await page.goto();
+  const panel = await openSidebarPanel(page, TOKEN_SECTION_ID);
+
+  await expect(
+    panel.getByRole('tablist', { name: 'Extension points' })
+  ).toBeVisible();
+
+  const commandsButton = panel.getByRole('tab', {
+    name: 'Commands',
+    exact: true
+  });
+  await commandsButton.click();
+  await expect(commandsButton).toHaveAttribute('aria-selected', 'true');
+
+  const filterInput = panel.getByPlaceholder('Filter command ids');
+  await filterInput.fill(LOAD_COMMAND);
+
+  await expect(panel.locator('.jp-PluginPlayground-listItem')).toHaveCount(1);
+  await expect(panel.locator('.jp-PluginPlayground-entryLabel')).toHaveText([
+    LOAD_COMMAND
+  ]);
+  await expect(panel.getByText('Load Current File As Extension')).toBeVisible();
+
+  const loadCommandArgumentsButton = panel.locator(
+    '.jp-PluginPlayground-argumentBadgeButton'
+  );
+  await expect(
+    loadCommandArgumentsButton.locator(
+      '.jp-PluginPlayground-argumentCountBadge'
+    )
+  ).toHaveText('?');
+  await expect(loadCommandArgumentsButton).toBeDisabled();
+  await expect(loadCommandArgumentsButton).toHaveAttribute(
+    'title',
+    'Argument documentation unavailable'
+  );
+
+  await filterInput.fill(INTERNAL_CONTEXT_INFO_COMMAND);
+  await expect(panel.locator('.jp-PluginPlayground-listItem')).toHaveCount(0);
+  await expect(panel.getByText('No matching commands.')).toBeVisible();
+
+  const commandWithArgumentDocs = await page.evaluate(async () => {
+    const commands = window.jupyterapp.commands;
+    const commandIds = commands
+      .listCommands()
+      .filter(id => !id.startsWith('__internal:'));
+
+    for (const id of commandIds) {
+      let usage = '';
+      try {
+        usage = commands.usage(id).trim();
+      } catch {
+        usage = '';
+      }
+
+      try {
+        const description = await commands.describedBy(id);
+        const args = description.args;
+        if (usage || (args && Object.keys(args).length > 0)) {
+          return id;
+        }
+      } catch {
+        if (usage) {
+          return id;
+        }
+      }
+    }
+
+    return null;
+  });
+  expect(commandWithArgumentDocs).toBeTruthy();
+  await filterInput.fill(commandWithArgumentDocs ?? '');
+  await expect(panel.locator('.jp-PluginPlayground-listItem')).toHaveCount(1);
+
+  const showArgsButton = panel.getByRole('button', {
+    name: `Show argument documentation for ${commandWithArgumentDocs}`
+  });
+  await expect(showArgsButton).toBeEnabled();
+  await showArgsButton.click();
+  await expect(
+    panel.getByRole('button', {
+      name: `Hide argument documentation for ${commandWithArgumentDocs}`
+    })
+  ).toHaveAttribute('aria-expanded', 'true');
+
+  const argumentsPanel = panel.locator('.jp-PluginPlayground-commandArguments');
+  await expect(argumentsPanel).toBeVisible();
+  await expect(
+    panel.locator('.jp-PluginPlayground-commandArgumentsText')
+  ).toContainText(/(Usage:|Arguments Schema:)/);
+});
+
+test('command completer suggests command ids inside execute calls', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/${COMMAND_COMPLETION_FILE}`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd } from '@jupyterlab/application';
+
+const run = (application: JupyterFrontEnd) => {
+  application.commands.execute();
+};
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(await page.activity.activateTab(COMMAND_COMPLETION_FILE)).toBe(true);
+
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    const line = 3;
+    const text = editor.getLine(line) ?? '';
+    editor.setCursorPosition({
+      line,
+      column: text.indexOf('(') + 1
+    });
+    editor.focus();
+  });
+
+  await page.keyboard.type('pl');
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, INVOKE_FILE_COMPLETER_COMMAND)
+  );
+  await page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id);
+  }, INVOKE_FILE_COMPLETER_COMMAND);
+  await page.waitForSelector(`.jp-Completer code:has-text("${LOAD_COMMAND}")`);
+
+  const suggestion = page
+    .locator(`.jp-Completer code:has-text("${LOAD_COMMAND}")`)
+    .first();
+  await Promise.all([
+    page.waitForSelector(`.jp-Completer code:has-text("${LOAD_COMMAND}")`, {
+      state: 'hidden'
+    }),
+    suggestion.click()
+  ]);
+
+  await page.waitForFunction((expected: string) => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const source = current.content.model.sharedModel.getSource();
+    return source.includes(`application.commands.execute('${expected}')`);
+  }, LOAD_COMMAND);
+});
+
+test('per-file load-on-save checkbox is unchecked by default and enables auto-load', async ({
+  page,
+  tmpPath
+}) => {
+  const pluginPath = `${tmpPath}/${TEST_FILE}`;
+
+  await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', pluginPath);
+  await page.goto();
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, LOAD_COMMAND)
+  );
+
+  await page.filebrowser.open(pluginPath);
+  expect(await page.activity.activateTab(TEST_FILE)).toBe(true);
+
+  const loadOnSaveCheckbox = await findLoadOnSaveCheckbox(page);
+  await expect(loadOnSaveCheckbox).not.toBeChecked();
+  await loadOnSaveCheckbox.check();
+  await expect(loadOnSaveCheckbox).toBeChecked();
+
+  await focusActiveEditor(page);
+  await page.keyboard.press('Space');
+  await page.keyboard.press('Backspace');
+  await page.evaluate(() => {
+    return window.jupyterapp.commands.execute('docmanager:save');
+  });
+
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.hasPlugin(id);
+    }, TEST_PLUGIN_ID)
+  );
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, TEST_TOGGLE_COMMAND)
+  );
+});
+
+test.describe('load-on-save setting', () => {
+  test.use({
+    mockSettings: {
+      ...galata.DEFAULT_SETTINGS,
+      [PLAYGROUND_PLUGIN_ID]: {
+        loadOnSave: true
+      }
+    }
+  });
+
+  test('auto-loads plugin when loadOnSave setting is enabled and file is saved', async ({
+    page,
+    tmpPath
+  }) => {
+    const pluginPath = `${tmpPath}/${TEST_FILE}`;
+
+    await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', pluginPath);
+    await page.goto();
+
+    await page.waitForCondition(() =>
+      page.evaluate((id: string) => {
+        return window.jupyterapp.commands.hasCommand(id);
+      }, LOAD_COMMAND)
+    );
+
+    await page.filebrowser.open(pluginPath);
+    expect(await page.activity.activateTab(TEST_FILE)).toBe(true);
+    const loadOnSaveCheckbox = page.getByRole('checkbox', {
+      name: LOAD_ON_SAVE_CHECKBOX_LABEL,
+      includeHidden: true
+    });
+    await expect(loadOnSaveCheckbox).toBeAttached();
+    await expect(loadOnSaveCheckbox).toBeHidden();
+
+    // Make the editor dirty so save reliably emits a completed saveState.
+    await focusActiveEditor(page);
+    await page.keyboard.press('Space');
+    await page.keyboard.press('Backspace');
+
+    await page.evaluate(() => {
+      return window.jupyterapp.commands.execute('docmanager:save');
+    });
+
+    await page.waitForCondition(() =>
+      page.evaluate((id: string) => {
+        return window.jupyterapp.hasPlugin(id);
+      }, TEST_PLUGIN_ID)
+    );
+
+    await page.waitForCondition(() =>
+      page.evaluate((id: string) => {
+        return window.jupyterapp.commands.hasCommand(id);
+      }, TEST_TOGGLE_COMMAND)
+    );
+
+    const initiallyToggled = await page.evaluate((id: string) => {
+      return window.jupyterapp.commands.isToggled(id);
+    }, TEST_TOGGLE_COMMAND);
+    expect(initiallyToggled).toBe(false);
+  });
+
+  test('hides file-level load-on-save checkbox when setting is enabled', async ({
+    page,
+    tmpPath
+  }) => {
+    const pluginPath = `${tmpPath}/${TEST_FILE}`;
+
+    await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', pluginPath);
+    await page.goto();
+    await page.waitForCondition(() =>
+      page.evaluate((id: string) => {
+        return window.jupyterapp.commands.hasCommand(id);
+      }, LOAD_COMMAND)
+    );
+
+    await page.filebrowser.open(pluginPath);
+    expect(await page.activity.activateTab(TEST_FILE)).toBe(true);
+
+    const loadOnSaveCheckbox = page.getByRole('checkbox', {
+      name: LOAD_ON_SAVE_CHECKBOX_LABEL,
+      includeHidden: true
+    });
+    await expect(loadOnSaveCheckbox).toBeAttached();
+    await expect(loadOnSaveCheckbox).toBeHidden();
+  });
 });
