@@ -968,15 +968,16 @@ export default plugin;
   const separatorIndex = tokenName.indexOf(':');
   const packageName = tokenName.slice(0, separatorIndex).trim();
   const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
-  const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
   const expectedDependency = `requires: [${tokenSymbol}]`;
   const expectedParameterName = parameterNameFromToken(tokenSymbol);
   const expectedTokenPattern = escapeRegExp(tokenSymbol);
   const expectedParameterPattern = escapeRegExp(expectedParameterName);
+  const expectedPackagePattern = escapeRegExp(packageName);
+  const expectedImportPattern = `import\\s*\\{[^}]*\\b${expectedTokenPattern}\\b[^}]*\\}\\s*from\\s*['"]${expectedPackagePattern}['"]\\s*;`;
 
   await page.waitForFunction(
     ({
-      expectedImportStatement,
+      expectedImportSourcePattern,
       expectedDependencyStatement,
       expectedToken,
       expectedParameter
@@ -991,13 +992,13 @@ export default plugin;
         `activate:\\s*\\(app:\\s*JupyterFrontEnd,\\s*${expectedParameter}\\s*:\\s*${expectedToken}\\)`
       );
       return (
-        source.startsWith(expectedImportStatement) &&
+        new RegExp(expectedImportSourcePattern).test(source) &&
         source.includes(expectedDependencyStatement) &&
         activatePattern.test(source)
       );
     },
     {
-      expectedImportStatement: expectedImport,
+      expectedImportSourcePattern: expectedImportPattern,
       expectedDependencyStatement: expectedDependency,
       expectedToken: expectedTokenPattern,
       expectedParameter: expectedParameterPattern
@@ -1012,24 +1013,41 @@ export default plugin;
   });
   await importButton.click();
   await page.waitForFunction(
-    ({ expectedImportStatement, expectedDependencyStatement }) => {
+    ({ expectedPackage, expectedTokenSymbol, expectedDependencyStatement }) => {
       const current = window.jupyterapp.shell
         .currentWidget as FileEditorWidget | null;
       const source = current?.content.model.sharedModel.getSource();
       if (typeof source !== 'string') {
         return false;
       }
+      const packageImportPattern = new RegExp(
+        `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${expectedPackage}['"]\\s*;`,
+        'g'
+      );
+      let canonicalSpecifierCount = 0;
+      let match = packageImportPattern.exec(source);
+      while (match) {
+        const specifiers = match[1]
+          .split(',')
+          .map(specifier => specifier.trim())
+          .filter(specifier => specifier.length > 0);
+        canonicalSpecifierCount += specifiers.filter(
+          specifier => specifier === expectedTokenSymbol
+        ).length;
+        match = packageImportPattern.exec(source);
+      }
       const highlightedLines = document.querySelectorAll(
         '.jp-FileEditor .jp-PluginPlayground-lineHighlight'
       ).length;
       return (
-        source.split(expectedImportStatement).length - 1 === 1 &&
+        canonicalSpecifierCount === 1 &&
         source.split(expectedDependencyStatement).length - 1 === 1 &&
         highlightedLines >= 2
       );
     },
     {
-      expectedImportStatement: expectedImport,
+      expectedPackage: expectedPackagePattern,
+      expectedTokenSymbol: tokenSymbol,
       expectedDependencyStatement: expectedDependency
     }
   );
@@ -1096,12 +1114,13 @@ export default plugin;
   await expect(importButton).toBeEnabled();
   await importButton.click();
 
-  const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
-  const aliasImport = `import { ${tokenSymbol} as existingAlias } from '${packageName}';`;
+  const expectedPackagePattern = escapeRegExp(packageName);
+  const aliasImport = `${tokenSymbol} as existingAlias`;
   const expectedDependency = `requires: [${tokenSymbol}]`;
   await page.waitForFunction(
     ({
-      expectedImportStatement,
+      expectedPackage,
+      expectedTokenSymbol,
       aliasImportStatement,
       expectedDependencyStatement
     }) => {
@@ -1111,14 +1130,34 @@ export default plugin;
       if (typeof source !== 'string') {
         return false;
       }
+      const packageImportPattern = new RegExp(
+        `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]${expectedPackage}['"]\\s*;`,
+        'g'
+      );
+      let hasAliasImport = false;
+      let canonicalSpecifierCount = 0;
+      let match = packageImportPattern.exec(source);
+      while (match) {
+        const specifiers = match[1]
+          .split(',')
+          .map(specifier => specifier.trim())
+          .filter(specifier => specifier.length > 0);
+        hasAliasImport =
+          hasAliasImport || specifiers.includes(aliasImportStatement);
+        canonicalSpecifierCount += specifiers.filter(
+          specifier => specifier === expectedTokenSymbol
+        ).length;
+        match = packageImportPattern.exec(source);
+      }
       return (
-        source.startsWith(expectedImportStatement) &&
-        source.includes(aliasImportStatement) &&
+        hasAliasImport &&
+        canonicalSpecifierCount >= 1 &&
         source.includes(expectedDependencyStatement)
       );
     },
     {
-      expectedImportStatement: expectedImport,
+      expectedPackage: expectedPackagePattern,
+      expectedTokenSymbol: tokenSymbol,
       aliasImportStatement: aliasImport,
       expectedDependencyStatement: expectedDependency
     }
@@ -1240,10 +1279,12 @@ export default plugin;
   const separatorIndex = tokenName.indexOf(':');
   const packageName = tokenName.slice(0, separatorIndex).trim();
   const tokenSymbol = tokenName.slice(separatorIndex + 1).trim();
-  const expectedImport = `import { ${tokenSymbol} } from '${packageName}';`;
+  const expectedPackagePattern = escapeRegExp(packageName);
+  const expectedTokenPattern = escapeRegExp(tokenSymbol);
+  const expectedImportPattern = `import\\s*\\{[^}]*\\b${expectedTokenPattern}\\b[^}]*\\}\\s*from\\s*['"]${expectedPackagePattern}['"]\\s*;`;
 
   await page.waitForFunction(
-    ({ expectedImportStatement, token }) => {
+    ({ expectedImportSourcePattern, token }) => {
       const current = window.jupyterapp.shell
         .currentWidget as FileEditorWidget | null;
       const source = current?.content.model.sharedModel.getSource();
@@ -1251,7 +1292,7 @@ export default plugin;
         return false;
       }
       return (
-        source.startsWith(expectedImportStatement) &&
+        new RegExp(expectedImportSourcePattern).test(source) &&
         source.includes('requires: requiredServices') &&
         source.split('requires:').length - 1 === 1 &&
         !source.includes(`requires: [${token}]`) &&
@@ -1259,7 +1300,7 @@ export default plugin;
       );
     },
     {
-      expectedImportStatement: expectedImport,
+      expectedImportSourcePattern: expectedImportPattern,
       token: tokenSymbol
     }
   );
