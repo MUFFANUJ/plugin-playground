@@ -20,6 +20,7 @@ const TEST_FILE = 'playground-integration-test.ts';
 const COMMAND_COMPLETION_FILE = 'command-completion.ts';
 const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
 const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
+const JUPYTERLITE_AI_CHAT_PANEL_ID = '@jupyterlite/ai:chat-panel';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -122,33 +123,97 @@ async function focusActiveEditor(page: IJupyterLabPageFixture): Promise<void> {
 async function ensureMockJupyterLiteAIChat(
   page: IJupyterLabPageFixture
 ): Promise<void> {
-  await page.evaluate((commandId: string) => {
-    const inputSelector = '.jp-chat-input-textfield textarea';
-    const ensureInput = (): void => {
-      if (document.querySelector(inputSelector)) {
-        return;
-      }
-      const wrapper = document.createElement('div');
-      wrapper.className = 'jp-chat-input-textfield';
-      wrapper.setAttribute('data-playground-test', 'ai-input');
-      wrapper.appendChild(document.createElement('textarea'));
-      document.body.prepend(wrapper);
-    };
-
-    const commands = window.jupyterapp.commands;
-    if (!commands.hasCommand(commandId)) {
-      commands.addCommand(commandId, {
-        label: 'JupyterLite AI test command',
-        describedBy: { args: null },
-        execute: () => {
-          ensureInput();
-          return undefined;
+  await page.evaluate(
+    ({
+      commandId,
+      chatPanelId
+    }: {
+      commandId: string;
+      chatPanelId: string;
+    }) => {
+      const inputSelector = '.jp-chat-input-textfield textarea';
+      const ensureInput = (): HTMLTextAreaElement => {
+        let input = document.querySelector(
+          inputSelector
+        ) as HTMLTextAreaElement | null;
+        if (input) {
+          return input;
         }
-      });
-    }
+        const wrapper = document.createElement('div');
+        wrapper.className = 'jp-chat-input-textfield';
+        wrapper.setAttribute('data-playground-test', 'ai-input');
+        input = document.createElement('textarea');
+        wrapper.appendChild(input);
+        document.body.prepend(wrapper);
+        return input;
+      };
 
-    ensureInput();
-  }, JUPYTERLITE_AI_OPEN_CHAT_COMMAND);
+      const inputModel = {
+        get value(): string {
+          return ensureInput().value;
+        },
+        set value(nextValue: string) {
+          const input = ensureInput();
+          input.value = nextValue;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        },
+        focus: () => {
+          ensureInput().focus();
+        }
+      };
+
+      const shell = window.jupyterapp.shell as any;
+      if (!shell.__playgroundOriginalWidgets) {
+        shell.__playgroundOriginalWidgets = shell.widgets.bind(shell);
+        shell.widgets = (area: string) => {
+          const originalWidgets = Array.from(
+            shell.__playgroundOriginalWidgets(area)
+          );
+          if (
+            (area === 'left' || area === 'right') &&
+            shell.__playgroundChatPanel
+          ) {
+            const chatPanel = shell.__playgroundChatPanel;
+            if (
+              !originalWidgets.some(
+                (widget: any) => widget?.id === chatPanel.id
+              )
+            ) {
+              originalWidgets.push(chatPanel);
+            }
+          }
+          return originalWidgets[Symbol.iterator]();
+        };
+      }
+      shell.__playgroundChatPanel = {
+        id: chatPanelId,
+        current: {
+          model: {
+            input: inputModel
+          }
+        }
+      };
+
+      const commands = window.jupyterapp.commands;
+      if (!commands.hasCommand(commandId)) {
+        commands.addCommand(commandId, {
+          label: 'JupyterLite AI test command',
+          describedBy: { args: null },
+          execute: () => {
+            ensureInput();
+            return undefined;
+          }
+        });
+      }
+
+      ensureInput();
+    },
+    {
+      commandId: JUPYTERLITE_AI_OPEN_CHAT_COMMAND,
+      chatPanelId: JUPYTERLITE_AI_CHAT_PANEL_ID
+    }
+  );
 }
 
 test('registers plugin playground commands', async ({ page }) => {
