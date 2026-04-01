@@ -1537,9 +1537,14 @@ export default extension;
   const modeMenuButton = commandListItem.locator(
     '.jp-PluginPlayground-commandInsertMenuButton'
   );
+  const primaryInsertButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertButton'
+  );
   await expect(modeMenuButton).toBeEnabled();
+  await expect(primaryInsertButton).toBeEnabled();
   await modeMenuButton.click();
   await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+  await primaryInsertButton.click();
 
   await expect(chatInput).toHaveValue(
     new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
@@ -1566,9 +1571,6 @@ export default extension;
 
   await chatInput.fill('');
 
-  const primaryInsertButton = commandListItem.locator(
-    '.jp-PluginPlayground-commandInsertButton'
-  );
   await primaryInsertButton.click();
 
   await expect(chatInput).toHaveValue(
@@ -1660,9 +1662,14 @@ export default [advanced, simple];
   const modeMenuButton = commandListItem.locator(
     '.jp-PluginPlayground-commandInsertMenuButton'
   );
+  const primaryInsertButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertButton'
+  );
   await expect(modeMenuButton).toBeEnabled();
+  await expect(primaryInsertButton).toBeEnabled();
   await modeMenuButton.click();
   await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+  await primaryInsertButton.click();
 
   await expect(chatInput).toHaveValue(
     new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
@@ -1764,9 +1771,14 @@ export default plugins;
   const modeMenuButton = commandListItem.locator(
     '.jp-PluginPlayground-commandInsertMenuButton'
   );
+  const primaryInsertButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertButton'
+  );
   await expect(modeMenuButton).toBeEnabled();
+  await expect(primaryInsertButton).toBeEnabled();
   await modeMenuButton.click();
   await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+  await primaryInsertButton.click();
 
   await expect(chatInput).toHaveValue(
     new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
