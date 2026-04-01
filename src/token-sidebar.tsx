@@ -51,6 +51,7 @@ export namespace TokenSidebar {
     ) => void;
     onInsertImport: (tokenName: string) => Promise<void> | void;
     isImportEnabled: (tokenName: string) => boolean;
+    onSetCommandInsertMode: (mode: CommandInsertMode) => Promise<void> | void;
     onInsertCommand: (
       commandId: string,
       mode: CommandInsertMode
@@ -74,17 +75,6 @@ const EXTENSION_POINT_PANEL_ID = 'jp-PluginPlayground-extensionPointPanel';
 const COMMAND_INSERT_MENU_INSERT_ID =
   'plugin-playground:command-insert-selection';
 const COMMAND_INSERT_MENU_AI_ID = 'plugin-playground:command-insert-ai';
-const COMMAND_INSERT_MENU_ARGS_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['commandId'],
-  properties: {
-    commandId: {
-      type: 'string',
-      description: 'Command ID used for insertion.'
-    }
-  }
-};
 
 export function filterTokenRecords(
   tokens: ReadonlyArray<TokenSidebar.ITokenRecord>,
@@ -135,6 +125,9 @@ export class TokenSidebar extends ReactWidget {
   ) => void;
   private readonly _onInsertImport: (tokenName: string) => Promise<void> | void;
   private readonly _isImportEnabled: (tokenName: string) => boolean;
+  private readonly _onSetCommandInsertMode: (
+    mode: CommandInsertMode
+  ) => Promise<void> | void;
   private readonly _onInsertCommand: (
     commandId: string,
     mode: CommandInsertMode
@@ -171,32 +164,25 @@ export class TokenSidebar extends ReactWidget {
     this._openDocumentationLink = options.openDocumentationLink;
     this._onInsertImport = options.onInsertImport;
     this._isImportEnabled = options.isImportEnabled;
+    this._onSetCommandInsertMode = options.onSetCommandInsertMode;
     this._onInsertCommand = options.onInsertCommand;
     this._getCommandInsertMode = options.getCommandInsertMode;
     this._isCommandInsertEnabled = options.isCommandInsertEnabled;
     this.addClass('jp-PluginPlayground-sidebar');
     this._commandInsertMenuCommands.addCommand(COMMAND_INSERT_MENU_INSERT_ID, {
       label: 'Insert in selection',
-      describedBy: { args: COMMAND_INSERT_MENU_ARGS_SCHEMA },
+      describedBy: { args: null },
       isToggled: () => this._getCommandInsertMode() === 'insert',
-      execute: args => {
-        const commandId = this._commandIdFromMenuArgs(args);
-        if (!commandId) {
-          return;
-        }
-        void this._insertCommand(commandId, 'insert');
+      execute: () => {
+        void this._setCommandInsertMode('insert');
       }
     });
     this._commandInsertMenuCommands.addCommand(COMMAND_INSERT_MENU_AI_ID, {
       label: 'Prompt AI to insert',
-      describedBy: { args: COMMAND_INSERT_MENU_ARGS_SCHEMA },
+      describedBy: { args: null },
       isToggled: () => this._getCommandInsertMode() === 'ai',
-      execute: args => {
-        const commandId = this._commandIdFromMenuArgs(args);
-        if (!commandId) {
-          return;
-        }
-        void this._insertCommand(commandId, 'ai');
+      execute: () => {
+        void this._setCommandInsertMode('ai');
       }
     });
   }
@@ -464,10 +450,7 @@ export class TokenSidebar extends ReactWidget {
                               event.preventDefault();
                             }}
                             onClick={event => {
-                              this._openCommandInsertMenu(
-                                event.currentTarget,
-                                command.id
-                              );
+                              this._openCommandInsertMenu(event.currentTarget);
                             }}
                             disabled={!canInsertCommand}
                             aria-haspopup="menu"
@@ -899,18 +882,13 @@ export class TokenSidebar extends ReactWidget {
     }
   }
 
-  private _openCommandInsertMenu(
-    anchorButton: HTMLButtonElement,
-    commandId: string
-  ): void {
+  private _openCommandInsertMenu(anchorButton: HTMLButtonElement): void {
     this._commandInsertMenu.clearItems();
     this._commandInsertMenu.addItem({
-      command: COMMAND_INSERT_MENU_INSERT_ID,
-      args: { commandId }
+      command: COMMAND_INSERT_MENU_INSERT_ID
     });
     this._commandInsertMenu.addItem({
-      command: COMMAND_INSERT_MENU_AI_ID,
-      args: { commandId }
+      command: COMMAND_INSERT_MENU_AI_ID
     });
     const anchorRect = anchorButton.getBoundingClientRect();
     const splitRect = anchorButton.parentElement?.getBoundingClientRect();
@@ -920,12 +898,18 @@ export class TokenSidebar extends ReactWidget {
     );
   }
 
-  private _commandIdFromMenuArgs(args: unknown): string {
-    return args && typeof args === 'object' && 'commandId' in args
-      ? typeof args.commandId === 'string'
-        ? args.commandId
-        : ''
-      : '';
+  private async _setCommandInsertMode(mode: CommandInsertMode): Promise<void> {
+    try {
+      await this._onSetCommandInsertMode(mode);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown mode switch error';
+      await showDialog({
+        title: 'Failed to change command insertion mode',
+        body: `Could not switch to "${mode}" mode. ${message}`,
+        buttons: [Dialog.okButton()]
+      });
+    }
   }
 
   private async _insertCommand(

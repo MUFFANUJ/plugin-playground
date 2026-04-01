@@ -585,6 +585,7 @@ class PluginPlayground {
         openDocumentationLink: this._openDocumentationLink.bind(this),
         onInsertImport: this._insertTokenImport.bind(this),
         isImportEnabled: this._canInsertImport.bind(this),
+        onSetCommandInsertMode: this._setCommandInsertMode.bind(this),
         onInsertCommand: this._insertCommandExecution.bind(this),
         getCommandInsertMode: () => this._commandInsertMode,
         isCommandInsertEnabled: this._hasEditableEditor.bind(this)
@@ -2151,18 +2152,7 @@ class PluginPlayground {
     commandId: string,
     mode: CommandInsertMode
   ): Promise<void> {
-    if (this._commandInsertMode !== mode) {
-      this._commandInsertMode = mode;
-      this._tokenSidebar?.update();
-      try {
-        await this.settings.set(COMMAND_INSERT_DEFAULT_MODE_SETTING, mode);
-      } catch (error) {
-        console.warn(
-          `Failed to persist "${COMMAND_INSERT_DEFAULT_MODE_SETTING}" setting.`,
-          error
-        );
-      }
-    }
+    await this._setCommandInsertMode(mode);
 
     const activeEditor = await this._requireEditableEditor(
       'Open a text editor tab to insert command execution.'
@@ -2204,6 +2194,22 @@ class PluginPlayground {
       Notification.warning(warningMessage, {
         autoClose: 5000
       });
+    }
+  }
+
+  private async _setCommandInsertMode(mode: CommandInsertMode): Promise<void> {
+    if (this._commandInsertMode === mode) {
+      return;
+    }
+    this._commandInsertMode = mode;
+    this._tokenSidebar?.update();
+    try {
+      await this.settings.set(COMMAND_INSERT_DEFAULT_MODE_SETTING, mode);
+    } catch (error) {
+      console.warn(
+        `Failed to persist "${COMMAND_INSERT_DEFAULT_MODE_SETTING}" setting.`,
+        error
+      );
     }
   }
 
@@ -2295,10 +2301,8 @@ class PluginPlayground {
     suggestedSnippet: string;
     appVariableName: string | null;
   }): Promise<void> {
-    const { editorWidget, sourceModel } = options.activeEditor;
-    const source = sourceModel.sharedModel.getSource();
+    const { editorWidget } = options.activeEditor;
     const prompt = this._buildCommandInsertAIPrompt({
-      source,
       commandId: options.commandId,
       path: editorWidget.context.path,
       suggestedSnippet: options.suggestedSnippet,
@@ -2359,16 +2363,11 @@ class PluginPlayground {
   }
 
   private _buildCommandInsertAIPrompt(options: {
-    source: string;
     commandId: string;
     path: string;
     suggestedSnippet: string;
     appVariableName: string | null;
   }): string {
-    const lines = options.source.split(/\r?\n/);
-    const context = lines
-      .map((line, index) => `${index + 1}: ${line}`)
-      .join('\n');
     const normalizedPath = ContentUtils.normalizeContentsPath(options.path);
     const appContextInstruction = options.appVariableName
       ? `Use the activate() app variable: ${options.appVariableName}.`
@@ -2376,12 +2375,11 @@ class PluginPlayground {
     return [
       'Insert this command execution in the best location in this file.',
       'Keep exactly one final execute() call for this command.',
+      'Use the currently open editor content as the source of truth.',
       appContextInstruction,
       `Command ID: ${options.commandId}`,
       `Suggested command call: ${options.suggestedSnippet}`,
-      `File: ${normalizedPath || '(unsaved)'}`,
-      'Context:',
-      context
+      `File: ${normalizedPath || '(unsaved)'}`
     ].join('\n');
   }
 

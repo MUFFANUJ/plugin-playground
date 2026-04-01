@@ -678,6 +678,13 @@ function jupyterFrontEndParameterName(
   activate: ts.FunctionLikeDeclarationBase,
   sourceFile: ts.SourceFile
 ): string | null {
+  const firstParameter = activate.parameters[0];
+  const firstUntypedIdentifierName =
+    firstParameter &&
+    ts.isIdentifier(firstParameter.name) &&
+    !firstParameter.type
+      ? firstParameter.name.text
+      : null;
   for (const parameter of activate.parameters) {
     if (!ts.isIdentifier(parameter.name) || !parameter.type) {
       continue;
@@ -687,7 +694,7 @@ function jupyterFrontEndParameterName(
       return parameter.name.text;
     }
   }
-  return null;
+  return firstUntypedIdentifierName;
 }
 
 function insertIntoExistingPackageImport(
