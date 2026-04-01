@@ -62,6 +62,7 @@ import { ImportResolver } from './resolver';
 import { IRequireJS, RequireJSLoader } from './requirejs';
 
 import {
+  type CommandInsertMode,
   filterCommandRecords,
   filterTokenRecords,
   TokenSidebar
@@ -80,6 +81,8 @@ import {
 
 import { ContentUtils } from './contents';
 import {
+  ensurePluginActivateAppContext,
+  findPluginActivateAppParameterName,
   insertImportStatement,
   insertTokenDependency,
   parseTokenReference
@@ -252,10 +255,16 @@ const CREATE_PLUGIN_ARGS_SCHEMA = {
 const LOAD_ON_SAVE_TOGGLE_TOOLBAR_ITEM = 'plugin-playground-load-on-save';
 const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Auto Load on Save';
 const LOAD_ON_SAVE_SETTING = 'loadOnSave';
+const COMMAND_INSERT_DEFAULT_MODE_SETTING = 'commandInsertDefaultMode';
 const LOAD_ON_SAVE_ENABLED_DESCRIPTION =
   'Toggle auto-loading this file as an extension on save';
 const LOAD_ON_SAVE_DISABLED_DESCRIPTION =
   'Auto load on save is available for JavaScript and TypeScript files';
+const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
+const JUPYTERLITE_AI_CHAT_PANEL_ID = '@jupyterlite/ai:chat-panel';
+const JUPYTERLITE_AI_INSTALL_HINT =
+  'JupyterLite AI is unavailable. Install the "jupyterlite-ai" extension and reload.';
+const DEFAULT_COMMAND_INSERT_MODE: CommandInsertMode = 'insert';
 const ARCHIVE_EXCLUDED_DIRECTORIES = new Set([
   '.git',
   '.ipynb_checkpoints',
@@ -573,7 +582,10 @@ class PluginPlayground {
         discoverKnownModules: force => discoverFederatedKnownModules({ force }),
         openDocumentationLink: this._openDocumentationLink.bind(this),
         onInsertImport: this._insertTokenImport.bind(this),
-        isImportEnabled: this._canInsertImport.bind(this)
+        isImportEnabled: this._canInsertImport.bind(this),
+        onInsertCommand: this._insertCommandExecution.bind(this),
+        getCommandInsertMode: () => this._commandInsertMode,
+        isCommandInsertEnabled: this._hasEditableEditor.bind(this)
       });
       this._tokenSidebar = tokenSidebar;
       tokenSidebar.id = 'jp-plugin-token-sidebar';
@@ -646,6 +658,7 @@ class PluginPlayground {
       settings.changed.connect(updatedSettings => {
         this.settings = updatedSettings;
         this._updateSettings(requirejs, updatedSettings);
+        tokenSidebar.update();
         for (const refresh of this._loadOnSaveToggleRefreshers) {
           refresh();
         }
@@ -1461,6 +1474,13 @@ class PluginPlayground {
     requirejs.require.config({
       baseUrl: baseURL
     });
+
+    const composite = settings.composite as Record<string, unknown>;
+    const rawCommandInsertMode = this._stringValue(
+      composite[COMMAND_INSERT_DEFAULT_MODE_SETTING]
+    );
+    this._commandInsertMode =
+      rawCommandInsertMode === 'ai' ? 'ai' : DEFAULT_COMMAND_INSERT_MODE;
   }
 
   private _getTokenRecords(): ReadonlyArray<TokenSidebar.ITokenRecord> {
@@ -2087,25 +2107,14 @@ class PluginPlayground {
       return;
     }
 
-    const editorWidget = this.editorTracker.currentWidget;
-    if (!editorWidget) {
-      await showDialog({
-        title: 'No active editor',
-        body: 'Open a text editor tab to insert an import statement.',
-        buttons: [Dialog.okButton()]
-      });
+    const activeEditor = await this._requireEditableEditor(
+      'Open a text editor tab to insert an import statement.'
+    );
+    if (!activeEditor) {
       return;
     }
 
-    const sourceModel = editorWidget.content.model;
-    if (!sourceModel || !sourceModel.sharedModel) {
-      await showDialog({
-        title: 'No editable content',
-        body: 'The active tab does not expose editable source text.',
-        buttons: [Dialog.okButton()]
-      });
-      return;
-    }
+    const { editorWidget, sourceModel } = activeEditor;
 
     const source = sourceModel.sharedModel.getSource();
     const importResult = insertImportStatement(source, tokenReference);
@@ -2133,14 +2142,278 @@ class PluginPlayground {
     if (!parseTokenReference(tokenName)) {
       return false;
     }
+    return this._hasEditableEditor();
+  }
 
+  private async _insertCommandExecution(
+    commandId: string,
+    mode: CommandInsertMode
+  ): Promise<void> {
+    if (this._commandInsertMode !== mode) {
+      this._commandInsertMode = mode;
+      this._tokenSidebar?.update();
+      try {
+        await this.settings.set(COMMAND_INSERT_DEFAULT_MODE_SETTING, mode);
+      } catch (error) {
+        console.warn(
+          `Failed to persist "${COMMAND_INSERT_DEFAULT_MODE_SETTING}" setting.`,
+          error
+        );
+      }
+    }
+
+    const activeEditor = await this._requireEditableEditor(
+      'Open a text editor tab to insert command execution.'
+    );
+    if (!activeEditor) {
+      return;
+    }
+
+    if (mode === 'insert') {
+      this._insertCommandExecutionAtCursor(activeEditor, commandId);
+      return;
+    }
+
+    const source = activeEditor.sourceModel.sharedModel.getSource();
+    const appVariableName = findPluginActivateAppParameterName(source);
+    const suggestedSnippet = this._commandExecutionSnippet(
+      commandId,
+      appVariableName ?? 'app'
+    );
+
+    try {
+      await this._promptAIToInsertCommand({
+        activeEditor,
+        commandId,
+        suggestedSnippet,
+        appVariableName
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        'Failed to prefill JupyterLite AI prompt for insertion.',
+        error
+      );
+      Notification.warning(
+        `Could not prefill AI insertion prompt for "${commandId}": ${message}`,
+        {
+          autoClose: 5000
+        }
+      );
+    }
+  }
+
+  private _insertCommandExecutionAtCursor(
+    activeEditor: {
+      editorWidget: IDocumentWidget<FileEditor>;
+      sourceModel: NonNullable<FileEditor['model']>;
+    },
+    commandId: string
+  ): void {
+    const { editorWidget, sourceModel } = activeEditor;
+    const editor = editorWidget.content.editor;
+    const originalSource = sourceModel.sharedModel.getSource();
+    const activateAppContext = ensurePluginActivateAppContext(originalSource);
+    if (activateAppContext.source !== originalSource) {
+      sourceModel.sharedModel.updateSource(
+        0,
+        originalSource.length,
+        activateAppContext.source
+      );
+    }
+
+    const cursorPosition = editor.getCursorPosition();
+    const insertionOffset = editor.getOffsetAt(cursorPosition);
+    const insertText = this._commandExecutionSnippet(
+      commandId,
+      activateAppContext.appVariableName
+    );
+
+    editor.setSelection({
+      start: cursorPosition,
+      end: cursorPosition
+    });
+    if (editor.replaceSelection) {
+      editor.replaceSelection(insertText);
+    } else {
+      sourceModel.sharedModel.updateSource(
+        insertionOffset,
+        insertionOffset,
+        insertText
+      );
+      const fallbackCursorPosition = editor.getPositionAt(
+        insertionOffset + insertText.length
+      );
+      if (fallbackCursorPosition) {
+        editor.setCursorPosition(fallbackCursorPosition);
+      }
+    }
+
+    const nextCursorPosition = editor.getCursorPosition();
+    editor.revealPosition(nextCursorPosition);
+    window.requestAnimationFrame(() => {
+      ContentUtils.highlightEditorLines(editor, [nextCursorPosition.line]);
+    });
+    editor.focus();
+  }
+
+  private async _promptAIToInsertCommand(options: {
+    commandId: string;
+    activeEditor: {
+      editorWidget: IDocumentWidget<FileEditor>;
+      sourceModel: NonNullable<FileEditor['model']>;
+    };
+    suggestedSnippet: string;
+    appVariableName: string | null;
+  }): Promise<void> {
+    const { editorWidget, sourceModel } = options.activeEditor;
+    const source = sourceModel.sharedModel.getSource();
+    const prompt = this._buildCommandInsertAIPrompt({
+      source,
+      commandId: options.commandId,
+      path: editorWidget.context.path,
+      suggestedSnippet: options.suggestedSnippet,
+      appVariableName: options.appVariableName
+    });
+
+    if (!this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_CHAT_COMMAND)) {
+      throw new Error(
+        `${JUPYTERLITE_AI_INSTALL_HINT} Missing command: "${JUPYTERLITE_AI_OPEN_CHAT_COMMAND}".`
+      );
+    }
+
+    await this.app.commands.execute(JUPYTERLITE_AI_OPEN_CHAT_COMMAND, {
+      area: 'side'
+    });
+
+    const inputModel = this._requireJupyterLiteAIChatInputModel();
+    this._setJupyterLiteAIInputPrompt(inputModel, prompt);
+  }
+
+  private _requireJupyterLiteAIChatInputModel(): {
+    value: string;
+    focus: () => void;
+  } {
+    const sideWidgets = Array.from(this.app.shell.widgets('left'));
+    const chatPanel = sideWidgets.find(
+      widget => widget.id === JUPYTERLITE_AI_CHAT_PANEL_ID
+    ) as
+      | {
+          current?: {
+            model?: { input?: unknown };
+          };
+        }
+      | undefined;
+
+    const candidate = chatPanel?.current?.model?.input;
+    if (
+      candidate &&
+      typeof candidate === 'object' &&
+      'value' in candidate &&
+      typeof candidate.value === 'string' &&
+      'focus' in candidate &&
+      typeof candidate.focus === 'function'
+    ) {
+      return candidate as { value: string; focus: () => void };
+    }
+    throw new Error(
+      'Opened JupyterLite AI chat, but could not access chat input model.'
+    );
+  }
+
+  private _setJupyterLiteAIInputPrompt(
+    inputModel: { value: string; focus: () => void },
+    prompt: string
+  ): void {
+    inputModel.value = prompt;
+    inputModel.focus();
+  }
+
+  private _buildCommandInsertAIPrompt(options: {
+    source: string;
+    commandId: string;
+    path: string;
+    suggestedSnippet: string;
+    appVariableName: string | null;
+  }): string {
+    const lines = options.source.split(/\r?\n/);
+    const context = lines
+      .map((line, index) => `${index + 1}: ${line}`)
+      .join('\n');
+    const normalizedPath = ContentUtils.normalizeContentsPath(options.path);
+    const appContextInstruction = options.appVariableName
+      ? `Use the activate() app variable: ${options.appVariableName}.`
+      : 'If app is missing, add JupyterFrontEnd import and declare activate(app: JupyterFrontEnd, ...).';
+    return [
+      'Insert this command execution in the best location in this file.',
+      'Keep exactly one final execute() call for this command.',
+      appContextInstruction,
+      `Command ID: ${options.commandId}`,
+      `Suggested command call: ${options.suggestedSnippet}`,
+      `File: ${normalizedPath || '(unsaved)'}`,
+      'Context:',
+      context
+    ].join('\n');
+  }
+
+  private _commandExecutionSnippet(
+    commandId: string,
+    appVariableName: string
+  ): string {
+    const escapedCommandId = commandId
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'");
+    return `${appVariableName}.commands.execute('${escapedCommandId}');`;
+  }
+
+  private _getEditableEditor(): {
+    editorWidget: IDocumentWidget<FileEditor>;
+    sourceModel: NonNullable<FileEditor['model']>;
+  } | null {
     const editorWidget = this.editorTracker.currentWidget;
-    if (!editorWidget) {
-      return false;
+    if (!editorWidget || editorWidget !== this.app.shell.currentWidget) {
+      return null;
     }
 
     const sourceModel = editorWidget.content.model;
-    return !!(sourceModel && sourceModel.sharedModel);
+    if (!sourceModel || !sourceModel.sharedModel) {
+      return null;
+    }
+
+    return {
+      editorWidget,
+      sourceModel
+    };
+  }
+
+  private _hasEditableEditor(): boolean {
+    return this._getEditableEditor() !== null;
+  }
+
+  private async _requireEditableEditor(noEditorMessage: string): Promise<{
+    editorWidget: IDocumentWidget<FileEditor>;
+    sourceModel: NonNullable<FileEditor['model']>;
+  } | null> {
+    const activeEditor = this._getEditableEditor();
+    if (activeEditor) {
+      return activeEditor;
+    }
+
+    if (!this.editorTracker.currentWidget) {
+      await showDialog({
+        title: 'No active editor',
+        body: noEditorMessage,
+        buttons: [Dialog.okButton()]
+      });
+      return null;
+    }
+
+    await showDialog({
+      title: 'No editable content',
+      body: 'The active tab does not expose editable source text.',
+      buttons: [Dialog.okButton()]
+    });
+    return null;
   }
 
   /**
@@ -2372,6 +2645,7 @@ class PluginPlayground {
     string,
     MainAreaWidget<IFrame>
   >();
+  private _commandInsertMode: CommandInsertMode = DEFAULT_COMMAND_INSERT_MODE;
   private _copiedCommandId: string | null = null;
   private _copiedCommandTimer: number | null = null;
   private _playgroundSidebar: SidePanel | null = null;

@@ -127,6 +127,42 @@
   justify-content: center;
 }
 
+.jp-PluginPlayground-commandInsertSplit {
+  align-items: center;
+  display: inline-flex;
+  gap: 0;
+}
+
+.jp-PluginPlayground-commandInsertButton {
+  min-width: 26px;
+}
+
+.jp-PluginPlayground-commandInsertMenuButton {
+  margin-left: calc(-1 * var(--jp-border-width));
+  border-left: var(--jp-border-width) solid var(--jp-border-color1);
+  min-width: 24px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.jp-PluginPlayground-commandInsertAIBadge {
+  align-items: center;
+  background: var(--jp-brand-color1);
+  border-radius: 999px;
+  color: var(--jp-ui-inverse-font-color1);
+  display: inline-flex;
+  gap: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.jp-PluginPlayground-commandInsertAIBadgeIcon {
+  height: 9px;
+  width: 9px;
+}
+
 .jp-PluginPlayground-argumentBadgeButton {
   position: relative;
 }

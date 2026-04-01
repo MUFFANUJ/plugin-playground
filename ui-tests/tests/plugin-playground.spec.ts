@@ -19,6 +19,7 @@ const TEST_TOGGLE_COMMAND = 'playground-integration-test:toggle';
 const TEST_FILE = 'playground-integration-test.ts';
 const COMMAND_COMPLETION_FILE = 'command-completion.ts';
 const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
+const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -116,6 +117,38 @@ async function focusActiveEditor(page: IJupyterLabPageFixture): Promise<void> {
     const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
     current.content.editor.focus();
   });
+}
+
+async function ensureMockJupyterLiteAIChat(
+  page: IJupyterLabPageFixture
+): Promise<void> {
+  await page.evaluate((commandId: string) => {
+    const inputSelector = '.jp-chat-input-textfield textarea';
+    const ensureInput = (): void => {
+      if (document.querySelector(inputSelector)) {
+        return;
+      }
+      const wrapper = document.createElement('div');
+      wrapper.className = 'jp-chat-input-textfield';
+      wrapper.setAttribute('data-playground-test', 'ai-input');
+      wrapper.appendChild(document.createElement('textarea'));
+      document.body.prepend(wrapper);
+    };
+
+    const commands = window.jupyterapp.commands;
+    if (!commands.hasCommand(commandId)) {
+      commands.addCommand(commandId, {
+        label: 'JupyterLite AI test command',
+        describedBy: { args: null },
+        execute: () => {
+          ensureInput();
+          return undefined;
+        }
+      });
+    }
+
+    ensureInput();
+  }, JUPYTERLITE_AI_OPEN_CHAT_COMMAND);
 }
 
 test('registers plugin playground commands', async ({ page }) => {
@@ -1258,6 +1291,389 @@ test('commands tab lists and filters available commands', async ({ page }) => {
   await expect(
     panel.locator('.jp-PluginPlayground-commandArgumentsText')
   ).toContainText(/(Usage:|Arguments Schema:)/);
+});
+
+test('commands tab inserts command execution at cursor position', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/command-sidebar-insert.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd } from '@jupyterlab/application';
+
+const run = (application: JupyterFrontEnd) => {
+
+  const marker = 1;
+  void marker;
+};
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(await page.activity.activateTab('command-sidebar-insert.ts')).toBe(
+    true
+  );
+
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    editor.setCursorPosition({
+      line: 3,
+      column: 2
+    });
+    editor.focus();
+  });
+
+  const expectedSourceAfterInsert = await page.evaluate((commandId: string) => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    const source = current.content.model.sharedModel.getSource();
+    const insertionOffset = editor.getOffsetAt(editor.getCursorPosition());
+    const inserted = `app.commands.execute('${commandId}');`;
+    return `${source.slice(0, insertionOffset)}${inserted}${source.slice(
+      insertionOffset
+    )}`;
+  }, LOAD_COMMAND);
+
+  const panel = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  await panel.getByRole('tab', { name: 'Commands', exact: true }).click();
+
+  const filterInput = panel.getByPlaceholder('Filter command ids');
+  await filterInput.fill(LOAD_COMMAND);
+  const commandListItem = panel.locator('.jp-PluginPlayground-listItem');
+  await expect(commandListItem).toHaveCount(1);
+
+  const insertButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertButton'
+  );
+  await expect(insertButton).toBeEnabled();
+  await insertButton.click();
+
+  await page.waitForFunction((expected: string) => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const source = current.content.model.sharedModel.getSource();
+    return source === expected;
+  }, expectedSourceAfterInsert);
+});
+
+test('commands tab can prompt JupyterLite AI and remember last insertion mode', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/command-sidebar-ai-prompt.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const extension: JupyterFrontEndPlugin<void> = {
+  id: 'command-sidebar-ai-prompt:plugin',
+  autoStart: true,
+  activate: activate
+};
+
+function activate(app: JupyterFrontEnd): void {
+  const marker = 1;
+  void marker;
+};
+
+export default extension;
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(await page.activity.activateTab('command-sidebar-ai-prompt.ts')).toBe(
+    true
+  );
+
+  await ensureMockJupyterLiteAIChat(page);
+
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    editor.setCursorPosition({
+      line: 9,
+      column: 2
+    });
+    editor.focus();
+  });
+
+  const sourceBefore = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  const suggestedSnippet = `app.commands.execute('${LOAD_COMMAND}');`;
+  const chatInput = page.locator('.jp-chat-input-textfield textarea');
+
+  const panel = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  await panel.getByRole('tab', { name: 'Commands', exact: true }).click();
+  await panel.getByPlaceholder('Filter command ids').fill(LOAD_COMMAND);
+  const commandListItem = panel.locator('.jp-PluginPlayground-listItem');
+  await expect(commandListItem).toHaveCount(1);
+
+  const modeMenuButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertMenuButton'
+  );
+  await expect(modeMenuButton).toBeEnabled();
+  await modeMenuButton.click();
+  await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Suggested command call: ${suggestedSnippet}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp('Use the activate() app variable: app.'))
+  );
+  await expect(chatInput).not.toHaveValue(
+    new RegExp(
+      escapeRegExp(
+        'If app is missing, add JupyterFrontEnd import and declare activate(app: JupyterFrontEnd, ...).'
+      )
+    )
+  );
+
+  const sourceAfterAIAction = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  expect(sourceAfterAIAction).toBe(sourceBefore);
+
+  await chatInput.fill('');
+
+  const primaryInsertButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertButton'
+  );
+  await primaryInsertButton.click();
+
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Suggested command call: ${suggestedSnippet}`))
+  );
+
+  const sourceAfterSecondAction = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  expect(sourceAfterSecondAction).toBe(sourceBefore);
+  await page.evaluate(() => {
+    document
+      .querySelector(
+        '.jp-chat-input-textfield[data-playground-test="ai-input"]'
+      )
+      ?.remove();
+  });
+});
+
+test('commands tab AI prompt detects activate app in default-export plugin arrays', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/command-sidebar-ai-prompt-array.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const simple: JupyterFrontEndPlugin<void> = {
+  id: 'command-sidebar-ai-prompt-array:simple',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd) => {
+    const marker = 1;
+    void marker;
+  }
+};
+
+const advanced: JupyterFrontEndPlugin<void> = {
+  id: 'command-sidebar-ai-prompt-array:advanced',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd, palette: unknown) => {
+    void app;
+    void palette;
+  }
+};
+
+export default [advanced, simple];
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(
+    await page.activity.activateTab('command-sidebar-ai-prompt-array.ts')
+  ).toBe(true);
+
+  await ensureMockJupyterLiteAIChat(page);
+
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    editor.setCursorPosition({
+      line: 6,
+      column: 4
+    });
+    editor.focus();
+  });
+
+  const sourceBefore = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  const suggestedSnippet = `app.commands.execute('${LOAD_COMMAND}');`;
+  const chatInput = page.locator('.jp-chat-input-textfield textarea');
+
+  const panel = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  await panel.getByRole('tab', { name: 'Commands', exact: true }).click();
+  await panel.getByPlaceholder('Filter command ids').fill(LOAD_COMMAND);
+  const commandListItem = panel.locator('.jp-PluginPlayground-listItem');
+  await expect(commandListItem).toHaveCount(1);
+
+  const modeMenuButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertMenuButton'
+  );
+  await expect(modeMenuButton).toBeEnabled();
+  await modeMenuButton.click();
+  await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Suggested command call: ${suggestedSnippet}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp('Use the activate() app variable: app.'))
+  );
+  await expect(chatInput).not.toHaveValue(
+    new RegExp(
+      escapeRegExp(
+        'If app is missing, add JupyterFrontEnd import and declare activate(app: JupyterFrontEnd, ...).'
+      )
+    )
+  );
+
+  const sourceAfterAIAction = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  expect(sourceAfterAIAction).toBe(sourceBefore);
+  await page.evaluate(() => {
+    document
+      .querySelector(
+        '.jp-chat-input-textfield[data-playground-test="ai-input"]'
+      )
+      ?.remove();
+  });
+});
+
+test('commands tab AI prompt detects activate app in exported plugin array variables', async ({
+  page,
+  tmpPath
+}) => {
+  const editorPath = `${tmpPath}/command-sidebar-ai-prompt-plugins-var.ts`;
+
+  await page.contents.uploadContent(
+    `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
+
+const simple: JupyterFrontEndPlugin<void> = {
+  id: 'command-sidebar-ai-prompt-plugins-var:simple',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd) => {
+    const marker = 1;
+    void marker;
+  }
+};
+
+const advanced: JupyterFrontEndPlugin<void> = {
+  id: 'command-sidebar-ai-prompt-plugins-var:advanced',
+  autoStart: true,
+  activate: (app: JupyterFrontEnd, palette: unknown) => {
+    void app;
+    void palette;
+  }
+};
+
+const plugins: JupyterFrontEndPlugin<void>[] = [advanced, simple];
+export default plugins;
+`,
+    'text',
+    editorPath
+  );
+  await page.goto();
+  await page.filebrowser.open(editorPath);
+  expect(
+    await page.activity.activateTab('command-sidebar-ai-prompt-plugins-var.ts')
+  ).toBe(true);
+
+  await ensureMockJupyterLiteAIChat(page);
+
+  await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    const editor = current.content.editor;
+    editor.setCursorPosition({
+      line: 6,
+      column: 4
+    });
+    editor.focus();
+  });
+
+  const sourceBefore = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  const suggestedSnippet = `app.commands.execute('${LOAD_COMMAND}');`;
+  const chatInput = page.locator('.jp-chat-input-textfield textarea');
+
+  const panel = await openSidebarPanel(page, TOKEN_SECTION_ID);
+  await panel.getByRole('tab', { name: 'Commands', exact: true }).click();
+  await panel.getByPlaceholder('Filter command ids').fill(LOAD_COMMAND);
+  const commandListItem = panel.locator('.jp-PluginPlayground-listItem');
+  await expect(commandListItem).toHaveCount(1);
+
+  const modeMenuButton = commandListItem.locator(
+    '.jp-PluginPlayground-commandInsertMenuButton'
+  );
+  await expect(modeMenuButton).toBeEnabled();
+  await modeMenuButton.click();
+  await page.getByRole('menuitem', { name: 'Prompt AI to insert' }).click();
+
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Command ID: ${LOAD_COMMAND}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp(`Suggested command call: ${suggestedSnippet}`))
+  );
+  await expect(chatInput).toHaveValue(
+    new RegExp(escapeRegExp('Use the activate() app variable: app.'))
+  );
+  await expect(chatInput).not.toHaveValue(
+    new RegExp(
+      escapeRegExp(
+        'If app is missing, add JupyterFrontEnd import and declare activate(app: JupyterFrontEnd, ...).'
+      )
+    )
+  );
+
+  const sourceAfterAIAction = await page.evaluate(() => {
+    const current = window.jupyterapp.shell.currentWidget as FileEditorWidget;
+    return current.content.model.sharedModel.getSource();
+  });
+  expect(sourceAfterAIAction).toBe(sourceBefore);
+  await page.evaluate(() => {
+    document
+      .querySelector(
+        '.jp-chat-input-textfield[data-playground-test="ai-input"]'
+      )
+      ?.remove();
+  });
 });
 
 test('command completer suggests command ids inside execute calls', async ({
