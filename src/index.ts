@@ -2325,6 +2325,17 @@ class PluginPlayground {
     const inputModel = await this._requireJupyterLiteAIChatInputModel();
     inputModel.value = prompt;
     inputModel.focus();
+    window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (
+        activeElement instanceof HTMLTextAreaElement ||
+        activeElement instanceof HTMLInputElement
+      ) {
+        const cursorIndex = activeElement.value.length;
+        activeElement.setSelectionRange(cursorIndex, cursorIndex);
+        activeElement.scrollTop = activeElement.scrollHeight;
+      }
+    });
   }
 
   private async _requireJupyterLiteAIChatInputModel(): Promise<{

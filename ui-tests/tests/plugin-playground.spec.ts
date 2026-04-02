@@ -1577,6 +1577,11 @@ export default extension;
   await expect(chatInput).toHaveValue(
     new RegExp(escapeRegExp('Use the activate() app variable: app.'))
   );
+  await expect
+    .poll(async () =>
+      chatInput.evaluate(input => input.selectionStart === input.value.length)
+    )
+    .toBe(true);
   await expect(chatInput).not.toHaveValue(
     new RegExp(
       escapeRegExp(
