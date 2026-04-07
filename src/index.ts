@@ -129,6 +129,11 @@ type PluginLoadStatus =
   | 'loading-failed'
   | 'autostart-failed';
 
+type ShareFolderSelectionDialogMode =
+  | 'always'
+  | 'auto-excluded-or-limit'
+  | 'limit-only';
+
 interface IPluginLoadResult {
   status: PluginLoadStatus;
   ok: boolean;
@@ -285,6 +290,8 @@ const LOAD_ON_SAVE_TOGGLE_TOOLBAR_ITEM = 'plugin-playground-load-on-save';
 const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Auto Load on Save';
 const LOAD_ON_SAVE_SETTING = 'loadOnSave';
 const COMMAND_INSERT_DEFAULT_MODE_SETTING = 'commandInsertDefaultMode';
+const SHARE_FOLDER_SELECTION_DIALOG_MODE_SETTING =
+  'shareFolderSelectionDialogMode';
 const LOAD_ON_SAVE_ENABLED_DESCRIPTION =
   'Toggle auto-loading this file as an extension on save';
 const LOAD_ON_SAVE_DISABLED_DESCRIPTION =
@@ -296,6 +303,8 @@ const JUPYTERLITE_AI_INSTALL_HINT =
 const JUPYTERLITE_AI_PROVIDER_SETUP_HINT =
   'JupyterLite AI provider is not configured. Configure a provider and try again.';
 const DEFAULT_COMMAND_INSERT_MODE: CommandInsertMode = 'insert';
+const DEFAULT_SHARE_FOLDER_SELECTION_DIALOG_MODE: ShareFolderSelectionDialogMode =
+  'always';
 const ARCHIVE_EXCLUDED_DIRECTORIES = new Set([
   '.git',
   '.ipynb_checkpoints',
@@ -418,18 +427,58 @@ class PluginPlayground {
       execute: async args => {
         const requestedPath =
           typeof args.path === 'string' ? args.path : undefined;
-        if (args.useBrowserSelection === true && !requestedPath) {
-          const selectedItem = this.fileBrowserFactory?.tracker.currentWidget
-            ?.selectedItems()
-            .next().value;
+        const useBrowserSelection = args.useBrowserSelection === true;
+        if (useBrowserSelection && !requestedPath) {
+          const contextTarget = this.app.contextMenuHitTest(node =>
+            node.classList.contains('jp-DirListing-item')
+          );
+          const contextTargetName = contextTarget?.querySelector(
+            '.jp-DirListing-itemText'
+          )?.textContent;
           if (
-            selectedItem &&
-            (selectedItem.type === 'file' || selectedItem.type === 'directory')
+            contextTargetName !== null &&
+            contextTargetName !== undefined &&
+            contextTargetName !== '..'
           ) {
-            return this._shareViaLink(selectedItem.path);
+            const browserDirectory = ContentUtils.normalizeContentsPath(
+              this.fileBrowserFactory?.tracker.currentWidget?.model.path ?? ''
+            );
+            const contextTargetPath = ContentUtils.normalizeContentsPath(
+              browserDirectory
+                ? PathExt.join(browserDirectory, contextTargetName)
+                : contextTargetName
+            );
+            if (contextTargetPath) {
+              return this._shareViaLink(contextTargetPath);
+            }
           }
+
+          const selectedItems = Array.from(
+            this.fileBrowserFactory?.tracker.currentWidget?.selectedItems() ??
+              []
+          ).filter(item => item.type === 'file' || item.type === 'directory');
+          if (selectedItems.length === 1) {
+            return this._shareViaLink(selectedItems[0].path);
+          }
+          const message =
+            selectedItems.length === 0
+              ? 'No file or folder is selected in the file browser.'
+              : 'Select a single file or folder in the file browser to share.';
+          Notification.warning(message, {
+            autoClose: 5000
+          });
+          return {
+            ok: false,
+            link: null,
+            sourcePath: null,
+            urlLength: 0,
+            message
+          };
         }
-        return this.shareViaLink(requestedPath);
+        if (requestedPath) {
+          return this.shareViaLink(requestedPath);
+        }
+        return this.shareViaLink();
       }
     });
 
@@ -989,10 +1038,27 @@ class PluginPlayground {
 
       if (directory) {
         sharedSourcePath = ContentUtils.normalizeContentsPath(directory.path);
-        const files = await this._collectShareableFolderFiles(sharedSourcePath);
+        const folderShareData = await this._collectShareableFolderFiles(
+          sharedSourcePath
+        );
+        const files = folderShareData.files;
         if (files.length === 0) {
           throw new Error(
             `No text-readable files were found in "${sharedSourcePath}".`
+          );
+        }
+
+        const shouldOpenSelectionDialogByMode =
+          this._shareFolderSelectionDialogMode === 'always' ||
+          (this._shareFolderSelectionDialogMode === 'auto-excluded-or-limit' &&
+            folderShareData.hasAutoExcludedFiles);
+
+        if (shouldOpenSelectionDialogByMode) {
+          return this._openFolderShareSelectionDialog(
+            sharedSourcePath,
+            files,
+            this._shareFolderSelectionDialogMode === 'always' &&
+              !folderShareData.hasAutoExcludedFiles
           );
         }
 
@@ -1057,9 +1123,10 @@ class PluginPlayground {
     }
   }
 
-  private async _collectShareableFolderFiles(
-    folderPath: string
-  ): Promise<IFolderShareCandidateFile[]> {
+  private async _collectShareableFolderFiles(folderPath: string): Promise<{
+    files: IFolderShareCandidateFile[];
+    hasAutoExcludedFiles: boolean;
+  }> {
     const filePaths = await this._collectArchiveFilePaths(folderPath);
     const textEncoder = new TextEncoder();
     const candidates = await this._mapWithConcurrency(
@@ -1092,9 +1159,14 @@ class PluginPlayground {
       }
     );
 
-    return candidates.filter(
+    const files = candidates.filter(
       (candidate): candidate is IFolderShareCandidateFile => candidate !== null
     );
+
+    return {
+      files,
+      hasAutoExcludedFiles: files.length !== candidates.length
+    };
   }
 
   private _notifyFolderShareTooLarge(
@@ -1109,7 +1181,7 @@ class PluginPlayground {
           label: 'Select files',
           displayType: 'accent',
           callback: () => {
-            void this._openFolderShareSelectionDialog(folderPath, files);
+            void this._openFolderShareSelectionDialog(folderPath, files, false);
           }
         }
       ]
@@ -1118,47 +1190,108 @@ class PluginPlayground {
 
   private async _openFolderShareSelectionDialog(
     folderPath: string,
-    files: ReadonlyArray<IFolderShareCandidateFile>
-  ): Promise<void> {
-    const selectedPaths = await selectFolderSharePaths(files);
-    if (selectedPaths === null) {
-      return;
-    }
-
-    if (selectedPaths.length === 0) {
-      Notification.warning('Select at least one file to share.', {
-        autoClose: 5000
-      });
-      return;
-    }
-
-    const selectedPathSet = new Set(selectedPaths);
-    const selectedFiles = files.filter(file =>
-      selectedPathSet.has(file.relativePath)
-    );
-
-    const payload = buildFolderSharePayload(folderPath, selectedFiles);
+    files: ReadonlyArray<IFolderShareCandidateFile>,
+    includeDisableDialogCheckbox: boolean
+  ): Promise<IPluginShareResult> {
     try {
+      const selectionResult = await selectFolderSharePaths(
+        files,
+        includeDisableDialogCheckbox
+      );
+      if (selectionResult === null) {
+        return {
+          ok: false,
+          link: null,
+          sourcePath: folderPath,
+          urlLength: 0,
+          message: 'Folder share selection was cancelled.'
+        };
+      }
+
+      const selectedPaths = selectionResult.selectedPaths;
+      if (selectedPaths.length === 0) {
+        Notification.warning('Select at least one file to share.', {
+          autoClose: 5000
+        });
+        return {
+          ok: false,
+          link: null,
+          sourcePath: folderPath,
+          urlLength: 0,
+          message: 'Select at least one file to share.'
+        };
+      }
+
+      const selectedPathSet = new Set(selectedPaths);
+      const selectedFiles = files.filter(file =>
+        selectedPathSet.has(file.relativePath)
+      );
+      const payload = buildFolderSharePayload(folderPath, selectedFiles);
+
       const linkResult = await this._createShareLink(payload);
       if (!linkResult.ok) {
         if (linkResult.reason === 'length') {
-          Notification.error(
-            `The selected files still produce a ${linkResult.urlLength}-character link (limit: ${SHARE_URL_MAX_LENGTH}). Select fewer files.`,
-            { autoClose: false }
-          );
-          return;
+          const message =
+            `The selected files still produce a ${linkResult.urlLength}-character link ` +
+            `(limit: ${SHARE_URL_MAX_LENGTH}). Select fewer files.`;
+          Notification.error(message, { autoClose: false });
+          return {
+            ok: false,
+            link: null,
+            sourcePath: folderPath,
+            urlLength: linkResult.urlLength,
+            message
+          };
         }
         Notification.error(`${linkResult.message} Select fewer files.`, {
           autoClose: false
         });
-        return;
+        return {
+          ok: false,
+          link: null,
+          sourcePath: folderPath,
+          urlLength: linkResult.urlLength,
+          message: `${linkResult.message} Select fewer files.`
+        };
       }
-      await this._finalizeShareLinkCopy(linkResult.link, folderPath);
+
+      const result = await this._finalizeShareLinkCopy(
+        linkResult.link,
+        folderPath
+      );
+      const allFilesSelected = selectedPaths.length === files.length;
+      if (
+        includeDisableDialogCheckbox &&
+        allFilesSelected &&
+        selectionResult.disableDialogIfAllFilesCanBeIncluded
+      ) {
+        try {
+          await this.settings.set(
+            SHARE_FOLDER_SELECTION_DIALOG_MODE_SETTING,
+            'auto-excluded-or-limit'
+          );
+          this._shareFolderSelectionDialogMode = 'auto-excluded-or-limit';
+        } catch (error) {
+          console.warn(
+            `Failed to persist "${SHARE_FOLDER_SELECTION_DIALOG_MODE_SETTING}" setting.`,
+            error
+          );
+        }
+      }
+
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       Notification.error(`Plugin share link creation failed: ${message}`, {
         autoClose: false
       });
+      return {
+        ok: false,
+        link: null,
+        sourcePath: folderPath,
+        urlLength: 0,
+        message
+      };
     }
   }
 
@@ -1765,6 +1898,16 @@ class PluginPlayground {
     );
     this._commandInsertMode =
       rawCommandInsertMode === 'ai' ? 'ai' : DEFAULT_COMMAND_INSERT_MODE;
+
+    const rawShareFolderSelectionDialogMode = this._stringValue(
+      composite[SHARE_FOLDER_SELECTION_DIALOG_MODE_SETTING]
+    );
+    this._shareFolderSelectionDialogMode =
+      rawShareFolderSelectionDialogMode === 'always' ||
+      rawShareFolderSelectionDialogMode === 'auto-excluded-or-limit' ||
+      rawShareFolderSelectionDialogMode === 'limit-only'
+        ? rawShareFolderSelectionDialogMode
+        : DEFAULT_SHARE_FOLDER_SELECTION_DIALOG_MODE;
   }
 
   private _getTokenRecords(): ReadonlyArray<TokenSidebar.ITokenRecord> {
@@ -3024,6 +3167,8 @@ class PluginPlayground {
     MainAreaWidget<IFrame>
   >();
   private _commandInsertMode: CommandInsertMode = DEFAULT_COMMAND_INSERT_MODE;
+  private _shareFolderSelectionDialogMode: ShareFolderSelectionDialogMode =
+    DEFAULT_SHARE_FOLDER_SELECTION_DIALOG_MODE;
   private _copiedCommandId: string | null = null;
   private _copiedCommandTimer: number | null = null;
   private _playgroundSidebar: SidePanel | null = null;

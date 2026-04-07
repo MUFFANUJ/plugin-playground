@@ -26,6 +26,8 @@ const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
 const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Auto Load on Save';
+const FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL =
+  'Do not ask me again if all files can be included';
 
 interface IWindowWithExportCounter extends Window {
   __exportDownloadCount?: number;
@@ -877,6 +879,7 @@ test('shares selected file or folder when using browser selection', async ({
   const filePath = `${projectRoot}/README.md`;
   const folderPath = `${projectRoot}/src`;
   const sourcePath = `${folderPath}/index.ts`;
+  const helperPath = `${folderPath}/util.ts`;
 
   await page.contents.uploadContent(
     '# Share Browser Selection\n',
@@ -884,6 +887,11 @@ test('shares selected file or folder when using browser selection', async ({
     filePath
   );
   await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+  await page.contents.uploadContent(
+    'export const util = 1;\n',
+    'text',
+    helperPath
+  );
   await page.goto();
 
   await page.waitForCondition(() =>
@@ -916,14 +924,233 @@ test('shares selected file or folder when using browser selection', async ({
   });
   await folderItem.click();
 
-  const folderShareResult = await page.evaluate((id: string) => {
+  const folderSharePromise = page.evaluate((id: string) => {
     return window.jupyterapp.commands.execute(id, {
       useBrowserSelection: true
     });
   }, SHARE_COMMAND);
+
+  const disableDialogCheckbox = page.getByRole('checkbox', {
+    name: FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL
+  });
+  await expect(disableDialogCheckbox).toBeVisible();
+
+  const shareSelectedFilesButton = page.getByRole('button', {
+    name: 'Share Selected Files',
+    exact: true
+  });
+  await expect(shareSelectedFilesButton).toBeVisible();
+
+  const indexFileCheckbox = page
+    .locator('label', { hasText: /^index\.ts \(/ })
+    .locator('input[type="checkbox"]');
+  const utilFileCheckbox = page
+    .locator('label', { hasText: /^util\.ts \(/ })
+    .locator('input[type="checkbox"]');
+  await expect(indexFileCheckbox).toBeVisible();
+  await expect(utilFileCheckbox).toBeVisible();
+  await expect(indexFileCheckbox).toBeChecked();
+  await expect(utilFileCheckbox).toBeChecked();
+
+  await utilFileCheckbox.uncheck();
+  await expect(indexFileCheckbox).toBeChecked();
+  await expect(utilFileCheckbox).not.toBeChecked();
+
+  await shareSelectedFilesButton.click();
+
+  const folderShareResult = await folderSharePromise;
   expect(folderShareResult.ok).toBe(true);
   expect(folderShareResult.sourcePath).toBe(folderPath);
   expect(folderShareResult.link).toContain('plugin=');
+});
+
+test('disables always-show folder selection dialog after opting out', async ({
+  page,
+  tmpPath
+}) => {
+  const projectRoot = `${tmpPath}/share-folder-setting-optout-test`;
+  const folderPath = `${projectRoot}/src`;
+  const sourcePath = `${folderPath}/index.ts`;
+
+  await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+  await page.goto();
+
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, SHARE_COMMAND)
+  );
+
+  await page.filebrowser.openDirectory(projectRoot);
+  const browserSection = page.getByRole('region', {
+    name: 'File Browser Section'
+  });
+  const folderItem = browserSection.getByRole('listitem', {
+    name: /^Name: src/
+  });
+  await folderItem.click();
+
+  const firstSharePromise = page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id, {
+      useBrowserSelection: true
+    });
+  }, SHARE_COMMAND);
+
+  const disableDialogCheckbox = page.getByRole('checkbox', {
+    name: FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL
+  });
+  await expect(disableDialogCheckbox).toBeVisible();
+  await disableDialogCheckbox.check();
+
+  const shareSelectedFilesButton = page.getByRole('button', {
+    name: 'Share Selected Files',
+    exact: true
+  });
+  await expect(shareSelectedFilesButton).toBeVisible();
+  await shareSelectedFilesButton.click();
+
+  const firstShareResult = await firstSharePromise;
+  expect(firstShareResult.ok).toBe(true);
+  expect(firstShareResult.sourcePath).toBe(folderPath);
+
+  await page.filebrowser.openDirectory(projectRoot);
+  await folderItem.click();
+
+  const secondShareResult = await page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id, {
+      useBrowserSelection: true
+    });
+  }, SHARE_COMMAND);
+
+  expect(secondShareResult.ok).toBe(true);
+  expect(secondShareResult.sourcePath).toBe(folderPath);
+  await expect(
+    page.getByRole('button', {
+      name: 'Share Selected Files',
+      exact: true
+    })
+  ).toHaveCount(0);
+});
+
+test.describe('share folder selection dialog modes', () => {
+  test.describe('auto-excluded-or-limit', () => {
+    test.use({
+      mockSettings: {
+        ...galata.DEFAULT_SETTINGS,
+        [PLAYGROUND_PLUGIN_ID]: {
+          shareFolderSelectionDialogMode: 'auto-excluded-or-limit'
+        }
+      }
+    });
+
+    test('opens file selection dialog when folder has auto-excluded files', async ({
+      page,
+      tmpPath
+    }) => {
+      const projectRoot = `${tmpPath}/share-folder-auto-excluded-mode-test`;
+      const folderPath = `${projectRoot}/src`;
+      const sourcePath = `${folderPath}/index.ts`;
+      const imagePath = `${folderPath}/icon.png`;
+
+      await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+      await page.contents.uploadContent('not-a-real-png', 'text', imagePath);
+      await page.goto();
+
+      await page.waitForCondition(() =>
+        page.evaluate((id: string) => {
+          return window.jupyterapp.commands.hasCommand(id);
+        }, SHARE_COMMAND)
+      );
+
+      await page.filebrowser.openDirectory(projectRoot);
+      const browserSection = page.getByRole('region', {
+        name: 'File Browser Section'
+      });
+      const folderItem = browserSection.getByRole('listitem', {
+        name: /^Name: src/
+      });
+      await folderItem.click();
+
+      const sharePromise = page.evaluate((id: string) => {
+        return window.jupyterapp.commands.execute(id, {
+          useBrowserSelection: true
+        });
+      }, SHARE_COMMAND);
+
+      const shareSelectedFilesButton = page.getByRole('button', {
+        name: 'Share Selected Files',
+        exact: true
+      });
+      await expect(shareSelectedFilesButton).toBeVisible();
+      await expect(
+        page.getByRole('checkbox', {
+          name: FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL
+        })
+      ).toHaveCount(0);
+
+      await shareSelectedFilesButton.click();
+      const result = await sharePromise;
+      expect(result.ok).toBe(true);
+      expect(result.sourcePath).toBe(folderPath);
+      expect(result.link).toContain('plugin=');
+    });
+  });
+
+  test.describe('limit-only', () => {
+    test.use({
+      mockSettings: {
+        ...galata.DEFAULT_SETTINGS,
+        [PLAYGROUND_PLUGIN_ID]: {
+          shareFolderSelectionDialogMode: 'limit-only'
+        }
+      }
+    });
+
+    test('skips file selection dialog when only auto-excluded files are omitted', async ({
+      page,
+      tmpPath
+    }) => {
+      const projectRoot = `${tmpPath}/share-folder-limit-only-mode-test`;
+      const folderPath = `${projectRoot}/src`;
+      const sourcePath = `${folderPath}/index.ts`;
+      const imagePath = `${folderPath}/icon.png`;
+
+      await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+      await page.contents.uploadContent('not-a-real-png', 'text', imagePath);
+      await page.goto();
+
+      await page.waitForCondition(() =>
+        page.evaluate((id: string) => {
+          return window.jupyterapp.commands.hasCommand(id);
+        }, SHARE_COMMAND)
+      );
+
+      await page.filebrowser.openDirectory(projectRoot);
+      const browserSection = page.getByRole('region', {
+        name: 'File Browser Section'
+      });
+      const folderItem = browserSection.getByRole('listitem', {
+        name: /^Name: src/
+      });
+      await folderItem.click();
+
+      const result = await page.evaluate((id: string) => {
+        return window.jupyterapp.commands.execute(id, {
+          useBrowserSelection: true
+        });
+      }, SHARE_COMMAND);
+
+      expect(result.ok).toBe(true);
+      expect(result.sourcePath).toBe(folderPath);
+      expect(result.link).toContain('plugin=');
+      await expect(
+        page.getByRole('button', {
+          name: 'Share Selected Files',
+          exact: true
+        })
+      ).toHaveCount(0);
+    });
+  });
 });
 
 test('shows share action in file browser context menu for file and folder', async ({

@@ -1,6 +1,7 @@
-import { InputDialog } from '@jupyterlab/apputils';
+import { Dialog, showDialog } from '@jupyterlab/apputils';
 import { PathExt } from '@jupyterlab/coreutils';
 import { formatFileSize } from '@jupyterlab/filebrowser';
+import { Widget } from '@lumino/widgets';
 
 import type { ShareLink } from './share-link';
 
@@ -8,6 +9,71 @@ export interface IFolderShareCandidateFile {
   relativePath: string;
   source: string;
   sizeBytes: number;
+}
+
+export interface IFolderShareSelectionResult {
+  selectedPaths: string[];
+  disableDialogIfAllFilesCanBeIncluded: boolean;
+}
+
+class FolderShareSelectionDialogBody
+  extends Widget
+  implements Dialog.IBodyWidget<string[]>
+{
+  constructor(
+    files: ReadonlyArray<IFolderShareCandidateFile>,
+    totalBytes: number
+  ) {
+    super();
+    this.addClass('jp-PluginPlayground-folderShareSelectionDialog');
+
+    const documentRef = this.node.ownerDocument;
+    const summary = documentRef.createElement('p');
+    summary.classList.add('jp-PluginPlayground-folderShareSelectionSummary');
+    summary.textContent =
+      `${files.length} selectable file${files.length === 1 ? '' : 's'} ` +
+      `(${formatFileSize(totalBytes, 1, 1024)} total).`;
+    this.node.appendChild(summary);
+
+    const list = documentRef.createElement('div');
+    list.classList.add('jp-PluginPlayground-folderShareSelectionList');
+
+    for (const file of files) {
+      const label = documentRef.createElement('label');
+      label.classList.add('jp-PluginPlayground-folderShareSelectionRow');
+
+      const checkbox = documentRef.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = true;
+      label.appendChild(checkbox);
+
+      const text = documentRef.createElement('span');
+      text.classList.add('jp-PluginPlayground-folderShareSelectionPath');
+      text.textContent =
+        `${file.relativePath} (` +
+        `${formatFileSize(file.sizeBytes, 1, 1024)})`;
+      label.appendChild(text);
+
+      this._checkboxRows.push({
+        path: file.relativePath,
+        checkbox
+      });
+      list.appendChild(label);
+    }
+
+    this.node.appendChild(list);
+  }
+
+  getValue(): string[] {
+    return this._checkboxRows
+      .filter(row => row.checkbox.checked)
+      .map(row => row.path);
+  }
+
+  private _checkboxRows: Array<{
+    path: string;
+    checkbox: HTMLInputElement;
+  }> = [];
 }
 
 const SHARE_FOLDER_EXCLUDED_EXTENSIONS = new Set([
@@ -67,8 +133,9 @@ export function buildFolderSharePayload(
 }
 
 export async function selectFolderSharePaths(
-  files: ReadonlyArray<IFolderShareCandidateFile>
-): Promise<string[] | null> {
+  files: ReadonlyArray<IFolderShareCandidateFile>,
+  includeDisableDialogCheckbox = false
+): Promise<IFolderShareSelectionResult | null> {
   const sortedFiles = [...files].sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath)
   );
@@ -76,29 +143,27 @@ export async function selectFolderSharePaths(
     (total, file) => total + file.sizeBytes,
     0
   );
-  const itemToPath = new Map<string, string>();
-  const items = sortedFiles.map(file => {
-    const item =
-      `${file.relativePath} (` + `${formatFileSize(file.sizeBytes, 1, 1024)})`;
-    itemToPath.set(item, file.relativePath);
-    return item;
-  });
 
-  const selectionResult = await InputDialog.getMultipleItems({
+  const selectionResult = await showDialog<string[]>({
     title: 'Select Files to Share',
-    label:
-      `${sortedFiles.length} selectable file` +
-      `${sortedFiles.length === 1 ? '' : 's'} ` +
-      `(${formatFileSize(totalBytes, 1, 1024)} total).`,
-    items,
-    defaults: items,
-    okLabel: 'Share Selected Files'
+    body: new FolderShareSelectionDialogBody(sortedFiles, totalBytes),
+    buttons: [
+      Dialog.cancelButton(),
+      Dialog.okButton({ label: 'Share Selected Files' })
+    ],
+    focusNodeSelector: 'input[type="checkbox"]',
+    checkbox: includeDisableDialogCheckbox
+      ? {
+          label: 'Do not ask me again if all files can be included'
+        }
+      : null
   });
   if (!selectionResult.button.accept) {
     return null;
   }
 
-  return (selectionResult.value ?? [])
-    .map(item => itemToPath.get(item) ?? '')
-    .filter(path => path.length > 0);
+  return {
+    selectedPaths: selectionResult.value ?? [],
+    disableDialogIfAllFilesCanBeIncluded: selectionResult.isChecked === true
+  };
 }

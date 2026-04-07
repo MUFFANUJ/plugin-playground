@@ -300,6 +300,32 @@
   word-break: normal;
 }
 
+.jp-PluginPlayground-folderShareSelectionDialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jp-PluginPlayground-folderShareSelectionSummary {
+  margin: 0;
+}
+
+.jp-PluginPlayground-folderShareSelectionList {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.jp-PluginPlayground-folderShareSelectionRow {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.jp-PluginPlayground-folderShareSelectionPath {
+  overflow-wrap: anywhere;
+}
+
 .jp-PluginPlayground-exampleError {
   color: var(--jp-error-color1);
 }
