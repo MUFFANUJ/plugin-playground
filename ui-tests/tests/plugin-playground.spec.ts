@@ -1032,6 +1032,66 @@ test('disables always-show folder selection dialog after opting out', async ({
   ).toHaveCount(0);
 });
 
+test('shows auto-excluded files as optional in always mode', async ({
+  page,
+  tmpPath
+}) => {
+  const projectRoot = `${tmpPath}/share-folder-always-auto-excluded-test`;
+  const folderPath = `${projectRoot}/src`;
+  const sourcePath = `${folderPath}/index.ts`;
+  const imagePath = `${folderPath}/icon.png`;
+
+  await page.contents.uploadContent(TEST_PLUGIN_SOURCE, 'text', sourcePath);
+  await page.contents.uploadContent('not-a-real-png', 'text', imagePath);
+  await page.goto();
+
+  await page.waitForCondition(() =>
+    page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, SHARE_COMMAND)
+  );
+
+  await page.filebrowser.openDirectory(projectRoot);
+  const browserSection = page.getByRole('region', {
+    name: 'File Browser Section'
+  });
+  const folderItem = browserSection.getByRole('listitem', {
+    name: /^Name: src/
+  });
+  await folderItem.click();
+
+  const sharePromise = page.evaluate((id: string) => {
+    return window.jupyterapp.commands.execute(id, {
+      useBrowserSelection: true
+    });
+  }, SHARE_COMMAND);
+
+  const shareSelectedFilesButton = page.getByRole('button', {
+    name: 'Share Selected Files',
+    exact: true
+  });
+  await expect(shareSelectedFilesButton).toBeVisible();
+  await expect(
+    page.getByRole('checkbox', {
+      name: FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL
+    })
+  ).toHaveCount(0);
+
+  const imageCheckbox = page
+    .locator('label', { hasText: /^icon\.png \(/ })
+    .locator('input[type="checkbox"]');
+  await expect(imageCheckbox).toBeVisible();
+  await expect(imageCheckbox).not.toBeChecked();
+  await imageCheckbox.check();
+  await expect(imageCheckbox).toBeChecked();
+
+  await shareSelectedFilesButton.click();
+  const result = await sharePromise;
+  expect(result.ok).toBe(true);
+  expect(result.sourcePath).toBe(folderPath);
+  expect(result.link).toContain('plugin=');
+});
+
 test.describe('share folder selection dialog modes', () => {
   test.describe('auto-excluded-or-limit', () => {
     test.use({
@@ -1087,6 +1147,14 @@ test.describe('share folder selection dialog modes', () => {
           name: FOLDER_SHARE_DISABLE_DIALOG_CHECKBOX_LABEL
         })
       ).toHaveCount(0);
+
+      const imageCheckbox = page
+        .locator('label', { hasText: /^icon\.png \(/ })
+        .locator('input[type="checkbox"]');
+      await expect(imageCheckbox).toBeVisible();
+      await expect(imageCheckbox).not.toBeChecked();
+      await imageCheckbox.check();
+      await expect(imageCheckbox).toBeChecked();
 
       await shareSelectedFilesButton.click();
       const result = await sharePromise;

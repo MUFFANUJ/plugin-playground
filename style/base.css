@@ -315,6 +315,15 @@
   overflow-y: auto;
 }
 
+.jp-PluginPlayground-folderShareSelectionHeading {
+  font-weight: 600;
+  margin: 10px 0 6px;
+}
+
+.jp-PluginPlayground-folderShareSelectionHeading:first-child {
+  margin-top: 0;
+}
+
 .jp-PluginPlayground-folderShareSelectionRow {
   align-items: center;
   display: flex;

@@ -9,6 +9,7 @@ export interface IFolderShareCandidateFile {
   relativePath: string;
   source: string;
   sizeBytes: number;
+  autoExcluded: boolean;
 }
 
 export interface IFolderShareSelectionResult {
@@ -35,30 +36,69 @@ class FolderShareSelectionDialogBody
       `(${formatFileSize(totalBytes, 1, 1024)} total).`;
     this.node.appendChild(summary);
 
+    const includedByDefault = files.filter(file => !file.autoExcluded);
+    const autoExcluded = files.filter(file => file.autoExcluded);
     const list = documentRef.createElement('div');
     list.classList.add('jp-PluginPlayground-folderShareSelectionList');
 
-    for (const file of files) {
-      const label = documentRef.createElement('label');
-      label.classList.add('jp-PluginPlayground-folderShareSelectionRow');
+    if (includedByDefault.length > 0) {
+      const heading = documentRef.createElement('p');
+      heading.classList.add('jp-PluginPlayground-folderShareSelectionHeading');
+      heading.textContent = 'Included by default';
+      list.appendChild(heading);
 
-      const checkbox = documentRef.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.checked = true;
-      label.appendChild(checkbox);
+      for (const file of includedByDefault) {
+        const label = documentRef.createElement('label');
+        label.classList.add('jp-PluginPlayground-folderShareSelectionRow');
 
-      const text = documentRef.createElement('span');
-      text.classList.add('jp-PluginPlayground-folderShareSelectionPath');
-      text.textContent =
-        `${file.relativePath} (` +
-        `${formatFileSize(file.sizeBytes, 1, 1024)})`;
-      label.appendChild(text);
+        const checkbox = documentRef.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = true;
+        label.appendChild(checkbox);
 
-      this._checkboxRows.push({
-        path: file.relativePath,
-        checkbox
-      });
-      list.appendChild(label);
+        const text = documentRef.createElement('span');
+        text.classList.add('jp-PluginPlayground-folderShareSelectionPath');
+        text.textContent =
+          `${file.relativePath} (` +
+          `${formatFileSize(file.sizeBytes, 1, 1024)})`;
+        label.appendChild(text);
+
+        this._checkboxRows.push({
+          path: file.relativePath,
+          checkbox
+        });
+        list.appendChild(label);
+      }
+    }
+
+    if (autoExcluded.length > 0) {
+      const heading = documentRef.createElement('p');
+      heading.classList.add('jp-PluginPlayground-folderShareSelectionHeading');
+      heading.textContent = 'Auto-excluded (select to include)';
+      list.appendChild(heading);
+
+      for (const file of autoExcluded) {
+        const label = documentRef.createElement('label');
+        label.classList.add('jp-PluginPlayground-folderShareSelectionRow');
+
+        const checkbox = documentRef.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = false;
+        label.appendChild(checkbox);
+
+        const text = documentRef.createElement('span');
+        text.classList.add('jp-PluginPlayground-folderShareSelectionPath');
+        text.textContent =
+          `${file.relativePath} (` +
+          `${formatFileSize(file.sizeBytes, 1, 1024)})`;
+        label.appendChild(text);
+
+        this._checkboxRows.push({
+          path: file.relativePath,
+          checkbox
+        });
+        list.appendChild(label);
+      }
     }
 
     this.node.appendChild(list);

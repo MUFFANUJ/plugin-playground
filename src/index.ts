@@ -271,6 +271,11 @@ const SHARE_VIA_LINK_ARGS_SCHEMA = {
       type: 'boolean',
       description:
         'When true, resolve the share path from the current file browser selection.'
+    },
+    useContextTarget: {
+      type: 'boolean',
+      description:
+        'When true, resolve the share path from the current context-menu target before using browser selection.'
     }
   }
 };
@@ -428,35 +433,49 @@ class PluginPlayground {
         const requestedPath =
           typeof args.path === 'string' ? args.path : undefined;
         const useBrowserSelection = args.useBrowserSelection === true;
+        const useContextTarget = args.useContextTarget === true;
         if (useBrowserSelection && !requestedPath) {
-          const contextTarget = this.app.contextMenuHitTest(node =>
-            node.classList.contains('jp-DirListing-item')
-          );
-          const contextTargetName = contextTarget?.querySelector(
-            '.jp-DirListing-itemText'
-          )?.textContent;
-          if (
-            contextTargetName !== null &&
-            contextTargetName !== undefined &&
-            contextTargetName !== '..'
-          ) {
-            const browserDirectory = ContentUtils.normalizeContentsPath(
-              this.fileBrowserFactory?.tracker.currentWidget?.model.path ?? ''
+          if (useContextTarget) {
+            const contextTarget = this.app.contextMenuHitTest(node =>
+              node.classList.contains('jp-DirListing-item')
             );
-            const contextTargetPath = ContentUtils.normalizeContentsPath(
-              browserDirectory
-                ? PathExt.join(browserDirectory, contextTargetName)
-                : contextTargetName
-            );
-            if (contextTargetPath) {
-              return this._shareViaLink(contextTargetPath);
+            const contextTargetName = contextTarget?.querySelector(
+              '.jp-DirListing-itemText'
+            )?.textContent;
+            if (
+              typeof contextTargetName === 'string' &&
+              contextTargetName.length > 0 &&
+              contextTargetName !== '..'
+            ) {
+              const browserDirectory = ContentUtils.normalizeContentsPath(
+                this.fileBrowserFactory?.tracker.currentWidget?.model.path ?? ''
+              );
+              const contextTargetPath = ContentUtils.normalizeContentsPath(
+                browserDirectory
+                  ? PathExt.join(browserDirectory, contextTargetName)
+                  : contextTargetName
+              );
+              if (contextTargetPath) {
+                return this._shareViaLink(contextTargetPath);
+              }
             }
           }
 
-          const selectedItems = Array.from(
-            this.fileBrowserFactory?.tracker.currentWidget?.selectedItems() ??
-              []
-          ).filter(item => item.type === 'file' || item.type === 'directory');
+          const selectedItems: Contents.IModel[] = [];
+          const selectedItemsIterator =
+            this.fileBrowserFactory?.tracker.currentWidget?.selectedItems();
+          if (selectedItemsIterator) {
+            for (
+              let result = selectedItemsIterator.next();
+              !result.done;
+              result = selectedItemsIterator.next()
+            ) {
+              const item = result.value;
+              if (item.type === 'file' || item.type === 'directory') {
+                selectedItems.push(item);
+              }
+            }
+          }
           if (selectedItems.length === 1) {
             return this._shareViaLink(selectedItems[0].path);
           }
@@ -1047,6 +1066,7 @@ class PluginPlayground {
             `No text-readable files were found in "${sharedSourcePath}".`
           );
         }
+        const defaultIncludedFiles = files.filter(file => !file.autoExcluded);
 
         const shouldOpenSelectionDialogByMode =
           this._shareFolderSelectionDialogMode === 'always' ||
@@ -1062,7 +1082,18 @@ class PluginPlayground {
           );
         }
 
-        const payload = buildFolderSharePayload(sharedSourcePath, files);
+        if (defaultIncludedFiles.length === 0) {
+          return this._openFolderShareSelectionDialog(
+            sharedSourcePath,
+            files,
+            false
+          );
+        }
+
+        const payload = buildFolderSharePayload(
+          sharedSourcePath,
+          defaultIncludedFiles
+        );
         const linkResult = await this._createShareLink(payload);
         if (!linkResult.ok) {
           this._notifyFolderShareTooLarge(
@@ -1134,9 +1165,7 @@ class PluginPlayground {
       ARCHIVE_FILE_READ_CONCURRENCY,
       async (filePath): Promise<IFolderShareCandidateFile | null> => {
         const relativePath = this._relativePath(folderPath, filePath);
-        if (shouldSkipFolderShareEntry(relativePath)) {
-          return null;
-        }
+        const autoExcluded = shouldSkipFolderShareEntry(relativePath);
 
         const fileModel = await ContentUtils.getFileModel(
           this.app.serviceManager,
@@ -1154,7 +1183,8 @@ class PluginPlayground {
         return {
           relativePath,
           source,
-          sizeBytes: textEncoder.encode(source).length
+          sizeBytes: textEncoder.encode(source).length,
+          autoExcluded
         };
       }
     );
@@ -1165,7 +1195,7 @@ class PluginPlayground {
 
     return {
       files,
-      hasAutoExcludedFiles: files.length !== candidates.length
+      hasAutoExcludedFiles: files.some(file => file.autoExcluded)
     };
   }
 
