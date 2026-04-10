@@ -9,17 +9,31 @@ const DEFAULT_WHEEL_SUMMARY =
   'JupyterLab extension exported from Plugin Playground.';
 const WHEEL_GENERATOR = 'jupyterlab-plugin-playground';
 const WHEEL_TAG = 'py3-none-any';
+const LICENSE_FILE_NAME_PATTERN =
+  /^(license|licence|copying|notice)([-._][A-Za-z0-9]+)*(\.(md|rst|txt))?$/i;
 
 interface IWheelMetadata {
   labextensionName: string;
   pythonPackageName: string;
   version: string;
   summary: string;
+  homePage: string;
+  license: string;
+  author: string;
+  authorEmail: string;
+  keywords: string;
 }
 
 export interface IWheelArchive {
   filename: string;
   entries: IArchiveEntry[];
+}
+
+function normalizeMetadataHeaderValue(value: unknown): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.replace(/[\r\n]+/g, ' ').trim();
 }
 
 function createWheelMetadata(
@@ -42,14 +56,15 @@ function createWheelMetadata(
         trimmedLabextensionName.replace(/\\/g, '/')
       ).replace(/\/+$/g, '')
     : '';
-  if (!labextensionName) {
-    const normalizedRootName = normalizeProjectName(fallbackRootName).replace(
-      /_/g,
-      '-'
-    );
-    labextensionName = normalizedRootName
-      ? `plugin-playground-${normalizedRootName}`
-      : 'plugin-playground-export';
+  const normalizedRootName = normalizeProjectName(fallbackRootName).replace(
+    /_/g,
+    '-'
+  );
+  const fallbackLabextensionName = normalizedRootName
+    ? `plugin-playground-${normalizedRootName}`
+    : 'plugin-playground-export';
+  if (!labextensionName || !ContentUtils.isSafeRelativePath(labextensionName)) {
+    labextensionName = fallbackLabextensionName;
   }
   const pythonPackageName =
     labextensionName
@@ -64,16 +79,41 @@ function createWheelMetadata(
       ? packageJson.version.trim().replace(/[^A-Za-z0-9.+!_-]+/g, '.')
       : DEFAULT_WHEEL_VERSION;
   const summary =
-    typeof packageJson?.description === 'string'
-      ? packageJson.description.replace(/[\r\n]+/g, ' ').trim() ||
-        DEFAULT_WHEEL_SUMMARY
-      : DEFAULT_WHEEL_SUMMARY;
+    normalizeMetadataHeaderValue(packageJson?.description) ||
+    DEFAULT_WHEEL_SUMMARY;
+  const homePage = normalizeMetadataHeaderValue(packageJson?.homepage);
+  const license = normalizeMetadataHeaderValue(packageJson?.license);
+  const keywords = Array.isArray(packageJson?.keywords)
+    ? packageJson.keywords
+        .map(keyword => normalizeMetadataHeaderValue(keyword))
+        .filter(keyword => keyword.length > 0)
+        .join(', ')
+    : '';
+  const authorValue = packageJson?.author;
+  let author = '';
+  let authorEmail = '';
+  if (typeof authorValue === 'string') {
+    author = normalizeMetadataHeaderValue(authorValue);
+  } else if (
+    authorValue !== null &&
+    typeof authorValue === 'object' &&
+    !Array.isArray(authorValue)
+  ) {
+    const authorObject = authorValue as Record<string, unknown>;
+    author = normalizeMetadataHeaderValue(authorObject.name);
+    authorEmail = normalizeMetadataHeaderValue(authorObject.email);
+  }
 
   return {
     labextensionName,
     pythonPackageName,
     version,
-    summary
+    summary,
+    homePage,
+    license,
+    author,
+    authorEmail,
+    keywords
   };
 }
 
@@ -114,6 +154,12 @@ export async function createPythonWheelArchive(
           }))
           .filter(entry => entry.path.length > 0)
       : normalizedEntries;
+  const unsafeEntry = projectEntries.find(
+    entry => !ContentUtils.isSafeRelativePath(entry.path)
+  );
+  if (unsafeEntry) {
+    throw new Error(`Unsupported archive entry path "${unsafeEntry.path}".`);
+  }
   const metadata = createWheelMetadata(projectEntries, rootName);
   const distribution =
     metadata.pythonPackageName.replace(/[^A-Za-z0-9.]+/g, '_') ||
@@ -151,6 +197,42 @@ export async function createPythonWheelArchive(
     );
   }
 
+  for (const projectEntry of projectEntries) {
+    if (
+      projectEntry.path.includes('/') ||
+      !LICENSE_FILE_NAME_PATTERN.test(projectEntry.path)
+    ) {
+      continue;
+    }
+    wheelEntries.push({
+      path: `${distInfoPath}/licenses/${projectEntry.path}`,
+      data: projectEntry.data
+    });
+  }
+
+  const metadataLines = [
+    'Metadata-Version: 2.1',
+    `Name: ${metadata.pythonPackageName}`,
+    `Version: ${metadata.version}`,
+    `Summary: ${metadata.summary}`
+  ];
+  if (metadata.homePage) {
+    metadataLines.push(`Home-page: ${metadata.homePage}`);
+  }
+  if (metadata.license) {
+    metadataLines.push(`License: ${metadata.license}`);
+  }
+  if (metadata.author) {
+    metadataLines.push(`Author: ${metadata.author}`);
+  }
+  if (metadata.authorEmail) {
+    metadataLines.push(`Author-email: ${metadata.authorEmail}`);
+  }
+  if (metadata.keywords) {
+    metadataLines.push(`Keywords: ${metadata.keywords}`);
+  }
+  metadataLines.push('');
+
   wheelEntries.push(
     textArchiveEntry(
       `${distInfoPath}/WHEEL`,
@@ -162,16 +244,7 @@ export async function createPythonWheelArchive(
         ''
       ].join('\n')
     ),
-    textArchiveEntry(
-      `${distInfoPath}/METADATA`,
-      [
-        'Metadata-Version: 2.1',
-        `Name: ${metadata.pythonPackageName}`,
-        `Version: ${metadata.version}`,
-        `Summary: ${metadata.summary}`,
-        ''
-      ].join('\n')
-    )
+    textArchiveEntry(`${distInfoPath}/METADATA`, metadataLines.join('\n'))
   );
   wheelEntries.sort((left, right) => left.path.localeCompare(right.path));
 

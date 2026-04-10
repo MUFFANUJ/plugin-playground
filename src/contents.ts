@@ -73,6 +73,21 @@ export namespace ContentUtils {
     return (path ?? '').replace(/^\/+/g, '');
   }
 
+  export function isSafeRelativePath(path: string): boolean {
+    const normalized = normalizeContentsPath(path).replace(/\\/g, '/');
+    if (!normalized) {
+      return false;
+    }
+    const segments = normalized.split('/');
+    return segments.every(
+      segment =>
+        segment.length > 0 &&
+        segment !== '.' &&
+        segment !== '..' &&
+        !segment.includes('\0')
+    );
+  }
+
   export function normalizeQuery(query: string): string {
     return query.trim().toLowerCase();
   }
