@@ -141,6 +141,14 @@ jobs:
         set -eux
         jlpm test
 
+    - name: Validate exported wheel archive
+      run: |
+        set -eux
+        python -m pip install twine wheel
+        test -f /tmp/plugin-playground-exported.whl
+        python -m twine check /tmp/plugin-playground-exported.whl
+        python -m wheel verify /tmp/plugin-playground-exported.whl
+
     - name: Execute docs screenshot tests
       working-directory: ui-tests
       run: |

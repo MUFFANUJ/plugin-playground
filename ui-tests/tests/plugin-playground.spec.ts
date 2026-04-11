@@ -26,6 +26,7 @@ const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
 const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Auto Load on Save';
+const EXPORTED_WHEEL_VALIDATION_PATH = '/tmp/plugin-playground-exported.whl';
 
 interface IWindowWithExportCounter extends Window {
   __exportDownloadCount?: number;
@@ -871,6 +872,8 @@ test('wheel export includes license files and sanitized METADATA fields', async 
     }, EXPORT_COMMAND)
   );
 
+  const exportedWheelDownload = page.waitForEvent('download');
+
   const inspection = await page.evaluate(async (id: string) => {
     const win = window as IWindowWithExportCounter;
     win.__exportDownloadBlobs = [];
@@ -973,6 +976,9 @@ test('wheel export includes license files and sanitized METADATA fields', async 
         .filter(line => line.length > 0)
     };
   }, EXPORT_COMMAND);
+
+  const downloadedWheel = await exportedWheelDownload;
+  await downloadedWheel.saveAs(EXPORTED_WHEEL_VALIDATION_PATH);
 
   expect(
     inspection.entryPaths.some(
