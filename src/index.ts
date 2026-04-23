@@ -323,6 +323,7 @@ const ARCHIVE_EXCLUDED_DIRECTORIES = new Set([
   'node_modules'
 ]);
 const ARCHIVE_FILE_READ_CONCURRENCY = 8;
+const HIDE_ALL_QUERY_KEY = 'hide-all';
 const URL_LOADED_EDITOR_HINT_CLASS = 'jp-PluginPlayground-urlLoadedEditorHint';
 const URL_LOADED_EDITOR_HINT_TITLE = 'Load as Extension';
 const URL_LOADED_EDITOR_HINT_MESSAGE =
@@ -868,6 +869,7 @@ class PluginPlayground {
         await this._loadPlugin(t, null);
       }
       await this._shareViaLinkController.loadSharedPluginFromUrl();
+      await this._applyLayoutFromQuery();
 
       settings.changed.connect(updatedSettings => {
         this.settings = updatedSettings;
@@ -1100,6 +1102,81 @@ class PluginPlayground {
     };
     widget.context.pathChanged.connect(onPathChanged);
     widget.disposed.connect(disposeCue);
+  }
+
+  private async _applyLayoutFromQuery(): Promise<void> {
+    const shouldHideAll =
+      typeof window !== 'undefined' &&
+      this._isHideAllQueryEnabled(window.location.href);
+    if (!shouldHideAll) {
+      return;
+    }
+
+    if (this.app.hasPlugin(NOTEBOOK_SHELL_PLUGIN_ID)) {
+      const notebookShell = this.app.shell as unknown as {
+        leftCollapsed: boolean;
+        rightCollapsed: boolean;
+        collapseLeft: () => void;
+        collapseRight: () => void;
+        collapseTop: () => void;
+      };
+      if (!notebookShell.leftCollapsed) {
+        notebookShell.collapseLeft();
+      }
+      if (!notebookShell.rightCollapsed) {
+        notebookShell.collapseRight();
+      }
+      notebookShell.collapseTop();
+      return;
+    }
+
+    const labShell = this.app.shell as unknown as {
+      mode: 'single-document' | 'multiple-document';
+      leftCollapsed: boolean;
+      rightCollapsed: boolean;
+      collapseLeft: () => void;
+      collapseRight: () => void;
+      isTopInSimpleModeVisible: () => boolean;
+      toggleTopInSimpleModeVisibility: () => void;
+    };
+
+    if (labShell.mode !== 'single-document') {
+      labShell.mode = 'single-document';
+    }
+    if (!labShell.leftCollapsed) {
+      labShell.collapseLeft();
+    }
+    if (!labShell.rightCollapsed) {
+      labShell.collapseRight();
+    }
+    if (labShell.isTopInSimpleModeVisible()) {
+      labShell.toggleTopInSimpleModeVisibility();
+    }
+
+    if (
+      this.app.commands.hasCommand('statusbar:toggle') &&
+      this.app.commands.isToggled('statusbar:toggle')
+    ) {
+      await this.app.commands.execute('statusbar:toggle');
+    }
+  }
+
+  private _isHideAllQueryEnabled(url: string): boolean {
+    const isTrue = (value: string | null): boolean =>
+      (value ?? '').trim().toLowerCase() === 'true';
+
+    try {
+      const parsedUrl = new URL(url);
+      if (isTrue(parsedUrl.searchParams.get(HIDE_ALL_QUERY_KEY))) {
+        return true;
+      }
+
+      const hashQuery = parsedUrl.hash.replace(/^#/, '').replace(/^\?/, '');
+      const hashParams = new URLSearchParams(hashQuery);
+      return isTrue(hashParams.get(HIDE_ALL_QUERY_KEY));
+    } catch {
+      return false;
+    }
   }
 
   private _queuePluginLoad(
