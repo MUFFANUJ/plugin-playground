@@ -792,6 +792,9 @@ class PluginPlayground {
     });
 
     app.restored.then(async () => {
+      this._hideAllFromInitialUrl =
+        typeof window !== 'undefined' &&
+        this._isHideAllQueryEnabled(window.location.href);
       const settings = this.settings;
       this._updateSettings(requirejs, settings);
       this._refreshExtensionPoints();
@@ -1138,8 +1141,9 @@ class PluginPlayground {
 
   private async _applyLayoutFromQuery(): Promise<void> {
     const shouldHideAll =
-      typeof window !== 'undefined' &&
-      this._isHideAllQueryEnabled(window.location.href);
+      this._hideAllFromInitialUrl ||
+      (typeof window !== 'undefined' &&
+        this._isHideAllQueryEnabled(window.location.href));
     if (!shouldHideAll) {
       return;
     }
@@ -1155,20 +1159,56 @@ class PluginPlayground {
       }
     };
 
-    const hideArea = async (command: string): Promise<void> => {
+    const shell = this.app.shell as any;
+
+    const hideArea = async (
+      command: string,
+      collapsedState: boolean | null
+    ): Promise<void> => {
       if (!this.app.commands.hasCommand(command)) {
         return;
       }
-      if (this.app.commands.isToggled(command)) {
-        await this.app.commands.execute(command);
+      if (collapsedState !== null) {
+        if (!collapsedState) {
+          await this.app.commands.execute(command);
+        }
+        return;
       }
+      await this.app.commands.execute(command);
     };
 
     await runCommand('application:set-mode', { mode: 'single-document' });
-    await hideArea('application:toggle-left-area');
-    await hideArea('application:toggle-right-area');
-    await hideArea('application:toggle-header');
-    await hideArea('statusbar:toggle');
+    if (typeof shell.collapseLeft === 'function') {
+      shell.collapseLeft();
+    } else {
+      await hideArea(
+        'application:toggle-left-area',
+        typeof shell.leftCollapsed === 'boolean' ? shell.leftCollapsed : null
+      );
+    }
+    if (typeof shell.collapseRight === 'function') {
+      shell.collapseRight();
+    } else {
+      await hideArea(
+        'application:toggle-right-area',
+        typeof shell.rightCollapsed === 'boolean' ? shell.rightCollapsed : null
+      );
+    }
+
+    if (typeof shell.isTopInSimpleModeVisible === 'function') {
+      if (shell.isTopInSimpleModeVisible()) {
+        await runCommand('application:toggle-header');
+      }
+    } else {
+      await hideArea('application:toggle-header', null);
+    }
+
+    if (
+      this.app.commands.hasCommand('statusbar:toggle') &&
+      this.app.commands.isToggled('statusbar:toggle')
+    ) {
+      await this.app.commands.execute('statusbar:toggle');
+    }
   }
 
   private _isHideAllQueryEnabled(url: string): boolean {
@@ -3139,6 +3179,7 @@ class PluginPlayground {
   private readonly _loadOnSaveToggleRefreshers = new Set<() => void>();
   private _sharedFileCueWidgetId: string | null = null;
   private _dismissSharedFileCue: (() => void) | null = null;
+  private _hideAllFromInitialUrl = false;
   private readonly _tokenMap = new Map<string, Token<string>>();
   private readonly _tokenDescriptionMap = new Map<string, string>();
   private readonly _documentationWidgets = new Map<
