@@ -365,6 +365,9 @@ class PluginPlayground {
     protected logConsoleTracker: ILogConsoleTracker | null
   ) {
     registerCoreKnownModules();
+    this._hideAllFromInitialUrl =
+      typeof window !== 'undefined' &&
+      this._isHideAllQueryEnabled(window.location.href);
 
     this._shareViaLinkController = new ShareViaLinkController({
       app: this.app,
@@ -792,9 +795,6 @@ class PluginPlayground {
     });
 
     app.restored.then(async () => {
-      this._hideAllFromInitialUrl =
-        typeof window !== 'undefined' &&
-        this._isHideAllQueryEnabled(window.location.href);
       const settings = this.settings;
       this._updateSettings(requirejs, settings);
       this._refreshExtensionPoints();
