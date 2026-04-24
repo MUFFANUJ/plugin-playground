@@ -413,6 +413,8 @@ class PluginPlayground {
       }
     });
 
+    app.commands.notifyCommandChanged(CommandIDs.loadCurrentAsExtension);
+
     app.commands.addCommand(CommandIDs.exportAsExtension, {
       label: 'Export Plugin Folder As Extension',
       caption:
