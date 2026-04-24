@@ -428,7 +428,7 @@ class PluginPlayground {
       }
     });
 
-    app.commands.notifyCommandChanged(CommandIDs.loadCurrentAsExtension);
+    this._notifyLoadCurrentAsExtensionCommandChanged();
 
     app.commands.addCommand(CommandIDs.exportAsExtension, {
       label: 'Export Plugin Folder As Extension',
@@ -539,11 +539,7 @@ class PluginPlayground {
           }
         };
         const onPathChanged = () => {
-          if (app.commands.hasCommand(CommandIDs.loadCurrentAsExtension)) {
-            app.commands.notifyCommandChanged(
-              CommandIDs.loadCurrentAsExtension
-            );
-          }
+          this._notifyLoadCurrentAsExtensionCommandChanged();
         };
         widget.context.saveState.connect(onSaveState);
         widget.context.pathChanged.connect(onPathChanged);
@@ -855,17 +851,15 @@ class PluginPlayground {
         }
       }
 
+      this._notifyLoadCurrentAsExtensionCommandChanged();
+
       app.shell.currentChanged?.connect(() => {
         tokenSidebar.update();
-        if (app.commands.hasCommand(CommandIDs.loadCurrentAsExtension)) {
-          app.commands.notifyCommandChanged(CommandIDs.loadCurrentAsExtension);
-        }
+        this._notifyLoadCurrentAsExtensionCommandChanged();
       });
       editorTracker.currentChanged.connect(() => {
         tokenSidebar.update();
-        if (app.commands.hasCommand(CommandIDs.loadCurrentAsExtension)) {
-          app.commands.notifyCommandChanged(CommandIDs.loadCurrentAsExtension);
-        }
+        this._notifyLoadCurrentAsExtensionCommandChanged();
       });
       app.commands.commandChanged.connect((_, args) => {
         if (args.type === 'added' || args.type === 'removed') {
@@ -916,6 +910,12 @@ class PluginPlayground {
 
   private _isGlobalLoadOnSaveEnabled(): boolean {
     return this.settings.get(LOAD_ON_SAVE_SETTING).composite === true;
+  }
+
+  private _notifyLoadCurrentAsExtensionCommandChanged(): void {
+    if (this.app.commands.hasCommand(CommandIDs.loadCurrentAsExtension)) {
+      this.app.commands.notifyCommandChanged(CommandIDs.loadCurrentAsExtension);
+    }
   }
 
   private _isSupportedPluginSourceFile(path: string): boolean {
