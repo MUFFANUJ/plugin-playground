@@ -58,8 +58,8 @@ const CSS_IMPORT_TEST_UPDATED_COLOR = 'rgb(34, 68, 102)';
 const CSS_IMPORT_TEST_BROKEN_MODULE_ERROR = 'css import rollback test failure';
 const COMMAND_COMPLETION_FILE = 'command-completion.ts';
 const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
-const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
-const JUPYTERLITE_AI_CHAT_PANEL_ID = '@jupyterlite/ai:chat-panel';
+const JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND =
+  '@jupyterlite/ai:open-or-reveal-chat';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -391,13 +391,7 @@ async function ensureMockJupyterLiteAIChat(
   page: IJupyterLabPageFixture
 ): Promise<void> {
   await page.evaluate(
-    ({
-      commandId,
-      chatPanelId
-    }: {
-      commandId: string;
-      chatPanelId: string;
-    }) => {
+    ({ commandId }: { commandId: string }) => {
       const inputSelector =
         '.jp-chat-input-textfield[data-playground-test="ai-input"] textarea';
       const ensureInput = (): HTMLTextAreaElement => {
@@ -416,71 +410,16 @@ async function ensureMockJupyterLiteAIChat(
         return input;
       };
 
-      const inputModel = {
-        get value(): string {
-          return ensureInput().value;
-        },
-        set value(nextValue: string) {
-          const input = ensureInput();
-          input.value = nextValue;
+      const applyOpenArgs = (args?: any): void => {
+        const input = ensureInput();
+        if (typeof args?.input === 'string') {
+          input.value = args.input;
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
-        },
-        focus: () => {
-          ensureInput().focus();
         }
-      };
-
-      const app = window.jupyterapp as any;
-      const chatWidget = {
-        id: chatPanelId,
-        model: {
-          input: inputModel
+        if (args?.focus !== false) {
+          input.focus();
         }
-      };
-      app.__playgroundChatTracker = {
-        currentWidget: chatWidget,
-        find: (predicate: (widget: unknown) => boolean) =>
-          predicate(chatWidget) ? chatWidget : null
-      };
-      if (
-        !app.__playgroundOriginalResolveOptionalService &&
-        typeof app.resolveOptionalService === 'function'
-      ) {
-        app.__playgroundOriginalResolveOptionalService =
-          app.resolveOptionalService.bind(app);
-        app.resolveOptionalService = async (token: { name?: string }) => {
-          if (token?.name === '@jupyter/chat:IChatTracker') {
-            return app.__playgroundChatTracker;
-          }
-          return app.__playgroundOriginalResolveOptionalService(token);
-        };
-      }
-
-      const shell = window.jupyterapp.shell as any;
-      if (!shell.__playgroundOriginalWidgets) {
-        shell.__playgroundOriginalWidgets = shell.widgets.bind(shell);
-        shell.widgets = (area: string) => {
-          const originalWidgets = Array.from(
-            shell.__playgroundOriginalWidgets(area)
-          );
-          if (
-            (area === 'left' || area === 'right') &&
-            shell.__playgroundChatPanel
-          ) {
-            const chatPanel = shell.__playgroundChatPanel;
-            const widgetsWithoutChatPanel = originalWidgets.filter(
-              (widget: any) => widget?.id !== chatPanel.id
-            );
-            widgetsWithoutChatPanel.push(chatPanel);
-            return widgetsWithoutChatPanel[Symbol.iterator]();
-          }
-          return originalWidgets[Symbol.iterator]();
-        };
-      }
-      shell.__playgroundChatPanel = {
-        id: chatPanelId,
-        current: chatWidget
       };
 
       const commands = window.jupyterapp.commands;
@@ -490,8 +429,8 @@ async function ensureMockJupyterLiteAIChat(
           commands.execute.bind(commands);
         commands.execute = async (id: string, args?: any) => {
           if (id === commandId) {
-            ensureInput();
-            return undefined;
+            applyOpenArgs(args);
+            return true;
           }
           return commandRegistry.__playgroundOriginalExecute(id, args);
         };
@@ -500,9 +439,9 @@ async function ensureMockJupyterLiteAIChat(
         commands.addCommand(commandId, {
           label: 'JupyterLite AI test command',
           describedBy: { args: null },
-          execute: () => {
-            ensureInput();
-            return undefined;
+          execute: (args?: any) => {
+            applyOpenArgs(args);
+            return true;
           }
         });
       }
@@ -510,8 +449,7 @@ async function ensureMockJupyterLiteAIChat(
       ensureInput();
     },
     {
-      commandId: JUPYTERLITE_AI_OPEN_CHAT_COMMAND,
-      chatPanelId: JUPYTERLITE_AI_CHAT_PANEL_ID
+      commandId: JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND
     }
   );
 }

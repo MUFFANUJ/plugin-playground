@@ -172,6 +172,10 @@ Plugin Playground supports AI-assisted extension prototyping in both JupyterLite
 - [JupyterLite AI documentation](https://jupyterlite-ai.readthedocs.io/en/latest/)
 - [Plugin authoring skill for agents](_agents/skills/plugin-authoring/SKILL.md)
 
+### JS Logs Ask AI (Optional)
+
+Plugin Playground can add an `Ask AI` button to JS Logs entries so you can send error text to JupyterLite AI chat for debugging context. This is disabled by default and can be enabled with the `askAILogEntryActionEnabled` setting. When enabled, the button appears only on `error`/`critical` entries that include text content.
+
 ### Command Insert Modes (Default + AI Prompt)
 
 In the `Commands` tab, each command row includes a split `+` action and a mode dropdown:
@@ -290,6 +294,8 @@ Runtime import resolution order is:
 
 `commandInsertDefaultMode` sets the default behavior for the `+` action in the Commands tab (`insert` for direct insertion or `ai` for AI-assisted prompt flow).
 
+`askAILogEntryActionEnabled` enables the optional `Ask AI` button for JS Logs `error`/`critical` entries with text content (disabled by default).
+
 `shareFolderSelectionDialogMode` controls when folder sharing prompts for file selection (`always`, `auto-excluded-or-limit`, `limit-only`).
 
 ![Plugin Playground settings showing command insert default mode](docs/images/readme/settings-command-insert-default-mode.png)
@@ -309,6 +315,7 @@ Example:
   requirejsCDN: 'https://cdn.jsdelivr.net/npm/',
   loadOnSave: false,
   commandInsertDefaultMode: 'insert',
+  askAILogEntryActionEnabled: false,
   urls: ['https://gist.githubusercontent.com/.../raw/plugin.ts'],
   plugins: [
     "{ \n\

@@ -3416,7 +3416,9 @@ class PluginPlayground {
   private async _openOrRevealJupyterLiteAIChat(options?: {
     input?: string;
   }): Promise<void> {
-    if (!this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND)) {
+    if (
+      !this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND)
+    ) {
       throw new JupyterLiteAIError(
         'install-unavailable',
         JUPYTERLITE_AI_INSTALL_HINT
@@ -3531,7 +3533,10 @@ class PluginPlayground {
       }
       this._askAILogEntryActionDisposable = disposable;
     } catch (error) {
-      console.warn('Failed to update js-logs Ask AI action registration.', error);
+      console.warn(
+        'Failed to update js-logs Ask AI action registration.',
+        error
+      );
     }
   }
 
