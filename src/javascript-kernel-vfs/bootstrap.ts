@@ -70,7 +70,9 @@ export function createJavaScriptKernelVfsInitCode(): string {
   }
   // Step 3: publish bundled declaration libs and a helper map factory.
   if (!globalThis.vfsBundledLibFiles) {
-    globalThis.vfsBundledLibFiles = ${JSON.stringify(bundledTypeScriptLibFiles)};
+    globalThis.vfsBundledLibFiles = ${JSON.stringify(
+      bundledTypeScriptLibFiles
+    )};
   }
   if (!globalThis.vfsCreateDefaultMapFromBundledLibs) {
     globalThis.vfsCreateDefaultMapFromBundledLibs = () =>

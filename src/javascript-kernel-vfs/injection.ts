@@ -11,10 +11,7 @@ const JAVASCRIPT_KERNEL_NAMES = new Set(['javascript', 'javascript-worker']);
  * We use these to trigger a one-time post-restart probe instead of probing on
  * every `runningChanged` emission.
  */
-const KERNEL_RESTART_STATES = new Set([
-  'starting',
-  'restarting'
-]);
+const KERNEL_RESTART_STATES = new Set(['starting', 'restarting']);
 
 /**
  * Silent kernel-side probe used to validate that the VFS bootstrap globals are
@@ -81,9 +78,8 @@ export class JavaScriptKernelVfsInjectionController {
     };
 
     kernelManager.runningChanged.connect((_sender, kernels) => {
-      const shouldSchedule = this._shouldScheduleInjectionForRunningKernels(
-        kernels
-      );
+      const shouldSchedule =
+        this._shouldScheduleInjectionForRunningKernels(kernels);
       if (!shouldSchedule) {
         return;
       }
@@ -185,7 +181,8 @@ export class JavaScriptKernelVfsInjectionController {
         if (content.status !== 'ok') {
           const errorName = content.ename || 'KernelError';
           const errorValue =
-            content.evalue || `VFS bootstrap failed with status ${content.status}.`;
+            content.evalue ||
+            `VFS bootstrap failed with status ${content.status}.`;
           throw new Error(`${errorName}: ${errorValue}`);
         }
         this._vfsInjectedKernelIds.add(kernelModel.id);
