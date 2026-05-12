@@ -1866,6 +1866,7 @@ __metadata:
     "@types/requirejs": ^2.1.34
     "@typescript-eslint/eslint-plugin": ^8.56.1
     "@typescript-eslint/parser": ^8.56.1
+    "@typescript/vfs": ^1.6.4
     eslint: ^9.39.3
     eslint-config-prettier: ^10.1.8
     jupyterlab-js-logs: ^1.2.0
@@ -3487,6 +3488,17 @@ __metadata:
     "@typescript-eslint/types": 8.56.1
     eslint-visitor-keys: ^5.0.0
   checksum: cd8cb26d855b09103bd8a5d5d3eb9eb9eecb7cf7276fd2bebf3f79deb6cd4d81b400b229fb8485cd7376e3c25bbd07b2d1674f47794ff84ffcc817859cd0cb62
+  languageName: node
+  linkType: hard
+
+"@typescript/vfs@npm:^1.6.4":
+  version: 1.6.4
+  resolution: "@typescript/vfs@npm:1.6.4"
+  dependencies:
+    debug: ^4.4.3
+  peerDependencies:
+    typescript: "*"
+  checksum: c180c64f283d02d9848438b2d63fbd1c206057f66b36441ae12407cda3a0b91940bf61a5c754b9802ec6dab8760f735883e7faceddd88b9ade03ef11d590d2d9
   languageName: node
   linkType: hard
 
