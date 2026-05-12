@@ -1,17 +1,15 @@
 import { JupyterFrontEnd } from '@jupyterlab/application';
+import { createJavaScriptKernelVfsInitCode } from './bootstrap';
 
 /**
- * Kernel spec names used by the JavaScript worker kernels in this project.
+ * Kernel spec names used by JavaScript kernels in this project.
  */
 const JAVASCRIPT_KERNEL_NAMES = new Set(['javascript', 'javascript-worker']);
 
 /**
- * Execution states that indicate a kernel is actively restarting.
- *
- * We use these to trigger a one-time post-restart probe instead of probing on
- * every `runningChanged` emission.
+ * Kernel statuses that indicate restart is in progress.
  */
-const KERNEL_RESTART_STATES = new Set(['starting', 'restarting']);
+const KERNEL_RESTART_STATUSES = new Set(['restarting', 'autorestarting']);
 
 /**
  * Silent kernel-side probe used to validate that the VFS bootstrap globals are
@@ -53,8 +51,14 @@ const VFS_BOOTSTRAP_PROBE_CODE = `(() => {
 interface IKernelModel {
   readonly id: string;
   readonly name: string;
-  readonly execution_state?: string;
 }
+
+type IKernelConnection = ReturnType<
+  JupyterFrontEnd['serviceManager']['kernels']['connectTo']
+>;
+
+type IKernelConnectTo =
+  JupyterFrontEnd['serviceManager']['kernels']['connectTo'];
 
 /**
  * Ensures JavaScript kernels expose bundled TypeScript + `@typescript/vfs`
@@ -64,31 +68,34 @@ export class JavaScriptKernelVfsInjectionController {
   constructor(private app: JupyterFrontEnd) {}
 
   /**
-   * Register kernel-manager hooks and run an initial injection pass.
+   * Register manager hooks and run an initial injection pass.
    */
   setup(): void {
     const kernelManager = this.app.serviceManager.kernels;
-    const scheduleInjection = () => {
-      void this._queueJavaScriptKernelVfsInjection().catch(error => {
-        console.warn(
-          'Failed to initialize @typescript/vfs in JavaScript kernels.',
-          error
-        );
-      });
-    };
+
+    this._patchKernelManagerConnectTo(kernelManager);
 
     kernelManager.runningChanged.connect((_sender, kernels) => {
-      const shouldSchedule =
-        this._shouldScheduleInjectionForRunningKernels(kernels);
+      const shouldSchedule = this._shouldScheduleInjectionForRunningKernels(
+        kernelManager,
+        kernels as IKernelModel[]
+      );
+      const activeJavaScriptKernelIds = new Set<string>();
+      for (const kernelModel of this._collectActiveJavaScriptKernelModels(
+        kernelManager
+      )) {
+        activeJavaScriptKernelIds.add(kernelModel.id);
+      }
+      this._removeStaleKernelTracking(activeJavaScriptKernelIds);
       if (!shouldSchedule) {
         return;
       }
-      scheduleInjection();
+      this._scheduleJavaScriptKernelVfsInjection();
     });
 
     void kernelManager.ready
       .then(() => {
-        scheduleInjection();
+        this._scheduleJavaScriptKernelVfsInjection();
       })
       .catch(error => {
         console.warn(
@@ -115,28 +122,37 @@ export class JavaScriptKernelVfsInjectionController {
     return pending;
   }
 
+  private _scheduleJavaScriptKernelVfsInjection(): void {
+    void this._queueJavaScriptKernelVfsInjection().catch(error => {
+      console.warn(
+        'Failed to initialize @typescript/vfs in JavaScript kernels.',
+        error
+      );
+    });
+  }
+
   private async _injectVfsIntoRunningJavaScriptKernels(): Promise<void> {
     const kernelManager = this.app.serviceManager.kernels;
+
     await kernelManager.ready;
     await kernelManager.refreshRunning();
 
     const activeJavaScriptKernelIds = new Set<string>();
-    const runningKernels = [...kernelManager.running()] as IKernelModel[];
+    const activeKernelModels =
+      this._collectActiveJavaScriptKernelModels(kernelManager);
     const kernelsToInject: IKernelModel[] = [];
 
-    for (const kernelModel of runningKernels) {
-      if (!JAVASCRIPT_KERNEL_NAMES.has(kernelModel.name)) {
-        continue;
-      }
-
+    for (const kernelModel of activeKernelModels) {
       const kernelId = kernelModel.id;
       activeJavaScriptKernelIds.add(kernelId);
-      this._kernelExecutionStateById.set(kernelId, kernelModel.execution_state);
+      this._ensureKernelStatusSubscription(kernelManager, kernelModel);
+
       if (this._vfsInjectedKernelIds.has(kernelId)) {
-        // Probe only when a restart transition has flagged this kernel.
+        // Probe only when restart status has flagged this kernel.
         if (!this._vfsProbeKernelIds.has(kernelId)) {
           continue;
         }
+
         this._vfsProbeKernelIds.delete(kernelId);
         const hasBootstrap = await this._kernelHasVfsBootstrap(
           kernelManager,
@@ -147,6 +163,7 @@ export class JavaScriptKernelVfsInjectionController {
         }
         this._vfsInjectedKernelIds.delete(kernelId);
       }
+
       kernelsToInject.push(kernelModel);
     }
 
@@ -155,83 +172,27 @@ export class JavaScriptKernelVfsInjectionController {
       return;
     }
 
-    const initCode = await this._getJavaScriptKernelVfsInitCode();
-
     for (const kernelModel of kernelsToInject) {
-      const kernelConnection = kernelManager.connectTo({
-        model: kernelModel,
-        handleComms: false
-      });
-      try {
-        const future = kernelConnection.requestExecute(
-          {
-            code: initCode,
-            silent: true,
-            store_history: false,
-            allow_stdin: false
-          },
-          true
-        );
-        const reply = await future.done;
-        const content = reply.content as {
-          status?: string;
-          ename?: string;
-          evalue?: string;
-        };
-        if (content.status !== 'ok') {
-          const errorName = content.ename || 'KernelError';
-          const errorValue =
-            content.evalue ||
-            `VFS bootstrap failed with status ${content.status}.`;
-          throw new Error(`${errorName}: ${errorValue}`);
-        }
-        this._vfsInjectedKernelIds.add(kernelModel.id);
-        this._vfsProbeKernelIds.delete(kernelModel.id);
-      } catch (error) {
-        console.warn(
-          `Failed to initialize @typescript/vfs in kernel "${kernelModel.name}" (${kernelModel.id}).`,
-          error
-        );
-      } finally {
-        kernelConnection.dispose();
-      }
+      await this._injectVfsIntoKernel(kernelManager, kernelModel);
     }
 
     this._removeStaleKernelTracking(activeJavaScriptKernelIds);
   }
 
-  private async _getJavaScriptKernelVfsInitCode(): Promise<string> {
+  private _getJavaScriptKernelVfsInitCode(): string {
     if (this._javascriptKernelVfsInitCode) {
       return this._javascriptKernelVfsInitCode;
     }
-    if (this._javascriptKernelVfsInitCodePending) {
-      return this._javascriptKernelVfsInitCodePending;
-    }
-
-    const pending = import('./bootstrap')
-      .then(module => module.createJavaScriptKernelVfsInitCode())
-      .then(code => {
-        this._javascriptKernelVfsInitCode = code;
-        return code;
-      })
-      .finally(() => {
-        if (this._javascriptKernelVfsInitCodePending === pending) {
-          this._javascriptKernelVfsInitCodePending = null;
-        }
-      });
-
-    this._javascriptKernelVfsInitCodePending = pending;
-    return pending;
+    this._javascriptKernelVfsInitCode = createJavaScriptKernelVfsInitCode();
+    return this._javascriptKernelVfsInitCode;
   }
 
   private async _kernelHasVfsBootstrap(
     kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
     kernelModel: { id: string; name: string }
   ): Promise<boolean> {
-    const kernelConnection = kernelManager.connectTo({
-      model: kernelModel,
-      handleComms: false
-    });
+    const kernelConnection = this._connectToKernel(kernelManager, kernelModel);
+
     try {
       const future = kernelConnection.requestExecute(
         {
@@ -252,10 +213,95 @@ export class JavaScriptKernelVfsInjectionController {
     }
   }
 
+  /**
+   * Inject bundled TypeScript + VFS globals into a specific JavaScript kernel.
+   *
+   * Returns true only when bootstrap execute reply is `ok` and the follow-up
+   * probe confirms all expected globals are present and shape-compatible.
+   */
+  private async _injectVfsIntoKernel(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
+    kernelModel: IKernelModel
+  ): Promise<boolean> {
+    const kernelId = kernelModel.id;
+    if (this._vfsInjectingKernelIds.has(kernelId)) {
+      return true;
+    }
+
+    this._vfsInjectingKernelIds.add(kernelId);
+    const kernelConnection = this._connectToKernel(kernelManager, kernelModel);
+
+    try {
+      const initCode = this._getJavaScriptKernelVfsInitCode();
+      const future = kernelConnection.requestExecute(
+        {
+          code: initCode,
+          silent: true,
+          store_history: false,
+          allow_stdin: false
+        },
+        true
+      );
+      const reply = await future.done;
+      const content = reply.content as {
+        status?: string;
+        ename?: string;
+        evalue?: string;
+      };
+
+      if (content.status !== 'ok') {
+        const errorName = content.ename || 'KernelError';
+        const errorValue =
+          content.evalue ||
+          `VFS bootstrap failed with status ${content.status}.`;
+        throw new Error(`${errorName}: ${errorValue}`);
+      }
+
+      const hasBootstrap = await this._kernelHasVfsBootstrap(
+        kernelManager,
+        kernelModel
+      );
+      if (!hasBootstrap) {
+        throw new Error(
+          'VFS bootstrap probe failed after initialization execute reply.'
+        );
+      }
+
+      this._vfsInjectedKernelIds.add(kernelId);
+      this._vfsProbeKernelIds.delete(kernelId);
+      return true;
+    } catch (error) {
+      this._vfsInjectedKernelIds.delete(kernelId);
+      console.warn(
+        `Failed to initialize @typescript/vfs in kernel "${kernelModel.name}" (${kernelId}).`,
+        error
+      );
+      return false;
+    } finally {
+      kernelConnection.dispose();
+      this._vfsInjectingKernelIds.delete(kernelId);
+    }
+  }
+
+  private _collectActiveJavaScriptKernelModels(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels']
+  ): IKernelModel[] {
+    const kernelModels: IKernelModel[] = [];
+
+    for (const kernelModel of [...kernelManager.running()] as IKernelModel[]) {
+      if (!JAVASCRIPT_KERNEL_NAMES.has(kernelModel.name)) {
+        continue;
+      }
+      kernelModels.push(kernelModel);
+    }
+
+    return kernelModels;
+  }
+
   private _shouldScheduleInjectionForRunningKernels(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
     kernels: ReadonlyArray<IKernelModel>
   ): boolean {
-    const activeJavaScriptKernelIds = new Set<string>();
     let shouldSchedule = false;
 
     for (const kernelModel of kernels) {
@@ -264,42 +310,66 @@ export class JavaScriptKernelVfsInjectionController {
       }
 
       const kernelId = kernelModel.id;
-      activeJavaScriptKernelIds.add(kernelId);
-      const isRestartTransition = this._isRestartTransition(
-        kernelId,
-        kernelModel.execution_state
-      );
+      this._ensureKernelStatusSubscription(kernelManager, kernelModel);
       if (!this._vfsInjectedKernelIds.has(kernelId)) {
         // New JavaScript kernel: inject immediately.
         shouldSchedule = true;
-        continue;
-      }
-      if (isRestartTransition) {
-        // Existing injected kernel restarted: mark for one probe.
-        this._vfsProbeKernelIds.add(kernelId);
-        shouldSchedule = true;
       }
     }
 
-    this._removeStaleKernelTracking(activeJavaScriptKernelIds);
     return shouldSchedule;
   }
 
-  private _isRestartTransition(
-    kernelId: string,
-    executionState: string | undefined
-  ): boolean {
-    const previousState = this._kernelExecutionStateById.get(kernelId);
-    this._kernelExecutionStateById.set(kernelId, executionState);
-    if (previousState === undefined) {
-      return false;
+  private _ensureKernelStatusSubscription(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
+    kernelModel: IKernelModel
+  ): void {
+    const kernelId = kernelModel.id;
+    const existingConnection = this._kernelStatusConnectionsById.get(kernelId);
+    if (existingConnection && !existingConnection.isDisposed) {
+      return;
     }
-    // Detect only "entering restart state" edges to keep scheduling deterministic.
-    return (
-      !KERNEL_RESTART_STATES.has(previousState) &&
-      !!executionState &&
-      KERNEL_RESTART_STATES.has(executionState)
-    );
+    if (existingConnection?.isDisposed) {
+      this._kernelStatusConnectionsById.delete(kernelId);
+    }
+
+    const kernelConnection = this._connectToKernel(kernelManager, kernelModel);
+
+    kernelConnection.statusChanged.connect((_sender, status) => {
+      if (!KERNEL_RESTART_STATUSES.has(status)) {
+        return;
+      }
+      this._vfsProbeKernelIds.add(kernelId);
+      this._scheduleJavaScriptKernelVfsInjection();
+    });
+
+    kernelConnection.disposed.connect(() => {
+      const currentConnection = this._kernelStatusConnectionsById.get(kernelId);
+      if (currentConnection !== kernelConnection) {
+        return;
+      }
+
+      this._kernelStatusConnectionsById.delete(kernelId);
+      if (!this._vfsInjectedKernelIds.has(kernelId)) {
+        return;
+      }
+
+      // If a tracked connection disappears (for example on restart), probe once
+      // after the kernel is available again to recover lost globals.
+      this._vfsProbeKernelIds.add(kernelId);
+      this._scheduleJavaScriptKernelVfsInjection();
+    });
+
+    this._kernelStatusConnectionsById.set(kernelId, kernelConnection);
+  }
+
+  private _disposeKernelStatusSubscription(kernelId: string): void {
+    const kernelConnection = this._kernelStatusConnectionsById.get(kernelId);
+    if (!kernelConnection) {
+      return;
+    }
+    this._kernelStatusConnectionsById.delete(kernelId);
+    kernelConnection.dispose();
   }
 
   private _removeStaleKernelTracking(activeKernelIds: Set<string>): void {
@@ -308,25 +378,100 @@ export class JavaScriptKernelVfsInjectionController {
         this._vfsInjectedKernelIds.delete(kernelId);
       }
     }
-    for (const kernelId of this._kernelExecutionStateById.keys()) {
-      if (!activeKernelIds.has(kernelId)) {
-        this._kernelExecutionStateById.delete(kernelId);
-      }
-    }
+
     for (const kernelId of this._vfsProbeKernelIds) {
       if (!activeKernelIds.has(kernelId)) {
         this._vfsProbeKernelIds.delete(kernelId);
       }
     }
+
+    for (const kernelId of this._kernelStatusConnectionsById.keys()) {
+      if (!activeKernelIds.has(kernelId)) {
+        this._disposeKernelStatusSubscription(kernelId);
+      }
+    }
   }
 
+  private _patchKernelManagerConnectTo(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels']
+  ): void {
+    if (this._kernelManagerConnectToPatched) {
+      return;
+    }
+
+    const originalConnectTo = kernelManager.connectTo.bind(kernelManager);
+    this._kernelManagerConnectTo = originalConnectTo;
+
+    kernelManager.connectTo = ((options: Parameters<IKernelConnectTo>[0]) => {
+      const kernelConnection = originalConnectTo(options);
+      if (!this._shouldBypassConnectToTracking) {
+        this._trackKernelConnectionFromAnyConnect(
+          kernelManager,
+          kernelConnection
+        );
+      }
+      return kernelConnection;
+    }) as IKernelConnectTo;
+
+    this._kernelManagerConnectToPatched = true;
+  }
+
+  private _connectToKernel(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
+    kernelModel: { id: string; name: string }
+  ): IKernelConnection {
+    const connect =
+      this._kernelManagerConnectTo ||
+      kernelManager.connectTo.bind(kernelManager);
+    this._shouldBypassConnectToTracking = true;
+    try {
+      return connect({
+        model: kernelModel,
+        handleComms: false
+      });
+    } finally {
+      this._shouldBypassConnectToTracking = false;
+    }
+  }
+
+  private _trackKernelConnectionFromAnyConnect(
+    kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
+    kernelConnection: IKernelConnection
+  ): void {
+    const kernelName = kernelConnection.name;
+    if (!JAVASCRIPT_KERNEL_NAMES.has(kernelName)) {
+      return;
+    }
+
+    const kernelModel = {
+      id: kernelConnection.id,
+      name: kernelName
+    };
+
+    this._ensureKernelStatusSubscription(kernelManager, kernelModel);
+    if (this._vfsInjectedKernelIds.has(kernelModel.id)) {
+      return;
+    }
+    void this._injectVfsIntoKernel(kernelManager, kernelModel).then(
+      injected => {
+        if (!injected) {
+          this._scheduleJavaScriptKernelVfsInjection();
+        }
+      }
+    );
+  }
+
+  private _kernelManagerConnectTo: IKernelConnectTo | null = null;
+  private _kernelManagerConnectToPatched = false;
+  private _shouldBypassConnectToTracking = false;
+
   private readonly _vfsInjectedKernelIds = new Set<string>();
+  private readonly _vfsInjectingKernelIds = new Set<string>();
   private readonly _vfsProbeKernelIds = new Set<string>();
-  private readonly _kernelExecutionStateById = new Map<
+  private readonly _kernelStatusConnectionsById = new Map<
     string,
-    string | undefined
+    IKernelConnection
   >();
   private _javascriptKernelVfsInitCode: string | null = null;
-  private _javascriptKernelVfsInitCodePending: Promise<string> | null = null;
   private _javascriptKernelVfsInjectionPending: Promise<void> | null = null;
 }
