@@ -493,15 +493,11 @@ const javaScriptKernelLspCommsPlugin: JupyterFrontEndPlugin<void> = {
   description:
     'Routes JupyterLab LSP WebSocket traffic through JavaScript kernel comms in Lite deployments.',
   autoStart: true,
-  optional: [ILSPDocumentConnectionManager],
+  requires: [ILSPDocumentConnectionManager],
   activate: (
     app: JupyterFrontEnd,
-    connectionManager: ILSPDocumentConnectionManager | null
+    connectionManager: ILSPDocumentConnectionManager
   ): void => {
-    if (!connectionManager) {
-      return;
-    }
-
     const kernelspecManager = app.serviceManager.kernelspecs;
     const patchIfJavaScriptKernelSpecAvailable = (): boolean => {
       const kernelspecs = kernelspecManager.specs?.kernelspecs;
