@@ -18,7 +18,11 @@ import {
   ToolbarButton
 } from '@jupyterlab/apputils';
 
-import { ILogConsoleTracker } from 'jupyterlab-js-logs';
+import {
+  ILogConsoleTracker,
+  ILogEntryActionRegistry,
+  type ILogEntryActionMessage
+} from 'jupyterlab-js-logs';
 
 import { Signal } from '@lumino/signaling';
 
@@ -190,41 +194,6 @@ interface ILayoutHideSelection {
   hideStatusBar: boolean;
 }
 
-/**
- * Serialized log output payload passed by the js-logs action API.
- */
-type ISerializedLogOutput = Record<string, unknown>;
-
-/**
- * Log entry payload received by the js-logs entry action callback.
- */
-interface ILogEntryActionMessage {
-  source: string;
-  entryIndex: number;
-  level: string;
-  timestamp: Date | null;
-  text: string;
-  output: ISerializedLogOutput;
-}
-
-/**
- * Action definition registered with the js-logs entry action registry.
- */
-interface ILogEntryAction {
-  id: string;
-  label: string;
-  caption?: string;
-  isVisible?: (message: ILogEntryActionMessage) => boolean;
-  execute: (message: ILogEntryActionMessage) => void | Promise<void>;
-}
-
-/**
- * Registry interface exposed by js-logs for entry-level actions.
- */
-interface ILogEntryActionRegistry {
-  register(action: ILogEntryAction): { dispose: () => void };
-}
-
 const PLUGIN_TEMPLATE = `import {
   JupyterFrontEnd,
   JupyterFrontEndPlugin,
@@ -344,8 +313,6 @@ const JUPYTERLITE_AI_OPEN_SETTINGS_COMMAND = '@jupyterlite/ai:open-settings';
 const JUPYTERLITE_AI_INSTALL_HINT =
   'JupyterLite AI is unavailable. Install the jupyterlite-ai extension and reload the application.';
 const JUPYTERLITE_AI_PROVIDER_SETUP_HINT = 'No AI provider configured.';
-const JS_LOGS_ENTRY_ACTION_REGISTRY_TOKEN_NAME =
-  'jupyterlab-js-logs:ILogEntryActionRegistry';
 const ASK_AI_LOG_ENTRY_ACTION_ID = 'plugin-playground:ask-ai-log-entry';
 const LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH = 8000;
 type JupyterLiteAIErrorCode = 'install-unavailable' | 'provider-setup-required';
@@ -3543,18 +3510,9 @@ class PluginPlayground {
   private async _registerAskAILogEntryAction(): Promise<{
     dispose: () => void;
   } | null> {
-    try {
-      this._populateTokenMap();
-    } catch {
-      return null;
-    }
-    const token = this._tokenMap.get(
-      JS_LOGS_ENTRY_ACTION_REGISTRY_TOKEN_NAME
-    ) as unknown as Token<ILogEntryActionRegistry> | null;
-    if (!token) {
-      return null;
-    }
-    const actionRegistry = await this.app.resolveOptionalService(token);
+    const actionRegistry = await this.app.resolveOptionalService(
+      ILogEntryActionRegistry
+    );
     if (!actionRegistry) {
       return null;
     }
@@ -3565,11 +3523,10 @@ class PluginPlayground {
         label: 'Ask AI',
         caption: 'Open AI chat and include this log entry for debugging',
         isVisible: message => {
-          const hasText = message.text.trim().length > 0;
-          if (!hasText) {
+          if (message.level !== 'error' && message.level !== 'critical') {
             return false;
           }
-          return message.level === 'error' || message.level === 'critical';
+          return this._extractTextFromLogEntryMessage(message).length > 0;
         },
         execute: message => {
           void this._openAIChatForLogEntry(message);
@@ -3612,13 +3569,38 @@ class PluginPlayground {
   }
 
   private _buildLogEntryAIPrompt(message: ILogEntryActionMessage): string {
-    const rawText = message.text.trim();
+    const rawText = this._extractTextFromLogEntryMessage(message);
+    if (!rawText) {
+      return '';
+    }
     const trimmedText =
       rawText.length > LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH
         ? `${rawText.slice(0, LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH)}\n...`
         : rawText;
 
     return trimmedText;
+  }
+
+  private _extractTextFromLogEntryMessage(
+    message: ILogEntryActionMessage
+  ): string {
+    const rawData = message.output['data'];
+    if (
+      typeof rawData !== 'object' ||
+      rawData === null ||
+      Array.isArray(rawData)
+    ) {
+      return '';
+    }
+
+    const text = (rawData as Record<string, unknown>)['text/plain'];
+    if (typeof text === 'string') {
+      return text.trim();
+    }
+    if (Array.isArray(text) && text.every(item => typeof item === 'string')) {
+      return text.join('').trim();
+    }
+    return '';
   }
 
   private _buildCommandInsertAIPrompt(options: {
