@@ -60,6 +60,8 @@ const COMMAND_COMPLETION_FILE = 'command-completion.ts';
 const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
 const JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND =
   '@jupyterlite/ai:open-or-reveal-chat';
+const JS_LOGS_OPEN_COMMAND = 'js-logs:open';
+const ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING = 'askAILogEntryActionEnabled';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -4436,6 +4438,69 @@ const run = (application: JupyterFrontEnd) => {
     const source = current.content.model.sharedModel.getSource();
     return source === expected;
   }, expectedSourceAfterInsert);
+});
+
+test.describe('JS logs Ask AI action', () => {
+  test.use({
+    mockSettings: {
+      ...galata.DEFAULT_SETTINGS,
+      [PLAYGROUND_PLUGIN_ID]: {
+        [ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING]: true
+      }
+    }
+  });
+
+  test('adds Ask AI button in log rows and prefills AI chat input', async ({
+    page
+  }) => {
+    const logMarker = `ask-ai-log-row-${Date.now()}`;
+    const chatInput = page.locator(
+      '.jp-chat-input-textfield[data-playground-test="ai-input"] textarea'
+    );
+
+    await page.goto();
+    await ensureMockJupyterLiteAIChat(page);
+
+    const hasJSLogsCommand = await page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, JS_LOGS_OPEN_COMMAND);
+    test.skip(
+      !hasJSLogsCommand,
+      'jupyterlab-js-logs is required for JS log row actions.'
+    );
+
+    await page.evaluate((id: string) => {
+      const commands = window.jupyterapp.commands;
+      if (!commands.isToggled(id)) {
+        return commands.execute(id);
+      }
+      return undefined;
+    }, JS_LOGS_OPEN_COMMAND);
+
+    await page.evaluate((message: string) => {
+      console.error(message);
+    }, logMarker);
+
+    const logRow = page.locator('.jp-OutputArea-child').filter({
+      hasText: logMarker
+    });
+    await expect(logRow).toHaveCount(1);
+    const askAIButton = logRow
+      .first()
+      .locator('button.jp-JSLogs-entryActionButton:has-text("Ask AI")');
+    await expect(askAIButton).toBeVisible();
+
+    await askAIButton.click();
+    await expect(chatInput).toHaveValue(new RegExp(escapeRegExp(logMarker)));
+
+    await page.evaluate(() => {
+      document
+        .querySelector(
+          '.jp-chat-input-textfield[data-playground-test="ai-input"]'
+        )
+        ?.remove();
+    });
+  });
 });
 
 test('commands tab can prompt JupyterLite AI and remember last insertion mode', async ({

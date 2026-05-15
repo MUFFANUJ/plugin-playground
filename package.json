@@ -136,6 +136,11 @@
         "extension": true,
         "outputDir": "jupyterlab_plugin_playground/labextension",
         "schemaDir": "schema",
+        "sharedPackages": {
+            "jupyterlab-js-logs": {
+                "singleton": true
+            }
+        },
         "disabledExtensions": [
             "jupyterlab-tour:default-tours"
         ]
