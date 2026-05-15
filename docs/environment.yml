@@ -10,6 +10,7 @@ dependencies:
   - myst-parser
   - ipywidgets>=8.0,<9
   - jupyterlab>=4.0.0,<5
+  - jupyterlab-lsp>=5.2.0,<6
   - jupyterlab-js-logs>=1.2,<2
   - jupyterlab-tour>=4,<5
   - jupyterlab-language-pack-fr-FR
@@ -21,5 +22,5 @@ dependencies:
   - nodejs=18
   - pip:
       - build
-      - jupyterlite-javascript-kernel>=0.4.0a3,<0.5
+      - jupyterlite-javascript-kernel>=0.4.0a4,<0.5
       - jupyterlab-open-url-parameter>=0.4,<1

@@ -1,10 +1,6 @@
 import { JupyterFrontEnd } from '@jupyterlab/application';
-import { createJavaScriptKernelVfsInitCode } from './bootstrap';
-
-/**
- * Kernel spec names used by JavaScript kernels in this project.
- */
-const JAVASCRIPT_KERNEL_NAMES = new Set(['javascript', 'javascript-worker']);
+import { executeJavaScriptKernelVfsInitCode } from './common';
+import { JAVASCRIPT_KERNEL_NAMES } from './constants';
 
 /**
  * Kernel statuses that indicate restart is in progress.
@@ -16,17 +12,23 @@ const KERNEL_RESTART_STATUSES = new Set(['restarting', 'autorestarting']);
  * present and shape-compatible.
  */
 const VFS_BOOTSTRAP_PROBE_CODE = `(() => {
-  const hasUsableTypeScript = candidate =>
-    !!candidate &&
-    typeof candidate === "object" &&
-    typeof candidate.createProgram === "function" &&
-    typeof candidate.createSourceFile === "function" &&
-    typeof candidate.ScriptTarget === "object";
-  const hasUsableTypeScriptVfs = candidate =>
-    !!candidate &&
-    typeof candidate === "object" &&
-    typeof candidate.createSystem === "function" &&
-    typeof candidate.createVirtualTypeScriptEnvironment === "function";
+  const hasUsableTypeScript = candidate => {
+    return (
+      !!candidate &&
+      typeof candidate === "object" &&
+      typeof candidate.createProgram === "function" &&
+      typeof candidate.createSourceFile === "function" &&
+      typeof candidate.ScriptTarget === "object"
+    );
+  };
+  const hasUsableTypeScriptVfs = candidate => {
+    return (
+      !!candidate &&
+      typeof candidate === "object" &&
+      typeof candidate.createSystem === "function" &&
+      typeof candidate.createVirtualTypeScriptEnvironment === "function"
+    );
+  };
 
   if (!hasUsableTypeScript(globalThis.ts)) {
     throw new Error("__PP_TS_MISSING__");
@@ -179,19 +181,16 @@ export class JavaScriptKernelVfsInjectionController {
     this._removeStaleKernelTracking(activeJavaScriptKernelIds);
   }
 
-  private _getJavaScriptKernelVfsInitCode(): string {
-    if (this._javascriptKernelVfsInitCode) {
-      return this._javascriptKernelVfsInitCode;
-    }
-    this._javascriptKernelVfsInitCode = createJavaScriptKernelVfsInitCode();
-    return this._javascriptKernelVfsInitCode;
-  }
-
   private async _kernelHasVfsBootstrap(
     kernelManager: JupyterFrontEnd['serviceManager']['kernels'],
     kernelModel: { id: string; name: string }
   ): Promise<boolean> {
-    const kernelConnection = this._connectToKernel(kernelManager, kernelModel);
+    const sharedStatusConnection = this._kernelStatusConnectionsById.get(
+      kernelModel.id
+    );
+    const kernelConnection =
+      sharedStatusConnection ||
+      this._connectToKernel(kernelManager, kernelModel);
 
     try {
       const future = kernelConnection.requestExecute(
@@ -209,7 +208,9 @@ export class JavaScriptKernelVfsInjectionController {
     } catch {
       return false;
     } finally {
-      kernelConnection.dispose();
+      if (!sharedStatusConnection) {
+        kernelConnection.dispose();
+      }
     }
   }
 
@@ -229,25 +230,17 @@ export class JavaScriptKernelVfsInjectionController {
     }
 
     this._vfsInjectingKernelIds.add(kernelId);
-    const kernelConnection = this._connectToKernel(kernelManager, kernelModel);
+    const sharedStatusConnection = this._kernelStatusConnectionsById.get(
+      kernelModel.id
+    );
+    const kernelConnection =
+      sharedStatusConnection ||
+      this._connectToKernel(kernelManager, kernelModel);
 
     try {
-      const initCode = this._getJavaScriptKernelVfsInitCode();
-      const future = kernelConnection.requestExecute(
-        {
-          code: initCode,
-          silent: true,
-          store_history: false,
-          allow_stdin: false
-        },
-        true
+      const content = await executeJavaScriptKernelVfsInitCode(
+        kernelConnection
       );
-      const reply = await future.done;
-      const content = reply.content as {
-        status?: string;
-        ename?: string;
-        evalue?: string;
-      };
 
       if (content.status !== 'ok') {
         const errorName = content.ename || 'KernelError';
@@ -278,7 +271,9 @@ export class JavaScriptKernelVfsInjectionController {
       );
       return false;
     } finally {
-      kernelConnection.dispose();
+      if (!sharedStatusConnection) {
+        kernelConnection.dispose();
+      }
       this._vfsInjectingKernelIds.delete(kernelId);
     }
   }
@@ -472,6 +467,5 @@ export class JavaScriptKernelVfsInjectionController {
     string,
     IKernelConnection
   >();
-  private _javascriptKernelVfsInitCode: string | null = null;
   private _javascriptKernelVfsInjectionPending: Promise<void> | null = null;
 }
