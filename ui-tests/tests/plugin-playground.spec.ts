@@ -61,7 +61,6 @@ const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
 const JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND =
   '@jupyterlite/ai:open-or-reveal-chat';
 const JS_LOGS_OPEN_COMMAND = 'js-logs:open';
-const ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING = 'askAILogEntryActionEnabled';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -4441,15 +4440,6 @@ const run = (application: JupyterFrontEnd) => {
 });
 
 test.describe('JS logs Ask AI action', () => {
-  test.use({
-    mockSettings: {
-      ...galata.DEFAULT_SETTINGS,
-      [PLAYGROUND_PLUGIN_ID]: {
-        [ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING]: true
-      }
-    }
-  });
-
   test('adds Ask AI button in log rows and prefills AI chat input', async ({
     page
   }) => {

@@ -44,12 +44,6 @@
       "type": "string",
       "enum": ["insert", "ai"]
     },
-    "askAILogEntryActionEnabled": {
-      "title": "Enable \"Ask AI\" in JS Logs",
-      "description": "Whether to show an \"Ask AI\" button on error/critical JS log entries with text content.",
-      "default": false,
-      "type": "boolean"
-    },
     "shareFolderSelectionDialogMode": {
       "title": "Show file selection dialog on folder share",
       "description": "Control when folder sharing opens the file-selection dialog. Use \"always\" to always ask, \"auto-excluded-or-limit\" to ask when files are auto-excluded or the URL size limit is hit, or \"limit-only\" to ask only when the URL size limit is hit.",

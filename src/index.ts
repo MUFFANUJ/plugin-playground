@@ -302,7 +302,6 @@ const LOAD_ON_SAVE_TOGGLE_TOOLBAR_ITEM = 'plugin-playground-load-on-save';
 const LOAD_ON_SAVE_CHECKBOX_LABEL = 'Run on save';
 const LOAD_ON_SAVE_SETTING = 'loadOnSave';
 const COMMAND_INSERT_DEFAULT_MODE_SETTING = 'commandInsertDefaultMode';
-const ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING = 'askAILogEntryActionEnabled';
 const LOAD_ON_SAVE_ENABLED_DESCRIPTION =
   'Toggle auto-loading this file as an extension on save';
 const LOAD_ON_SAVE_DISABLED_DESCRIPTION =
@@ -899,6 +898,12 @@ class PluginPlayground {
         if (args.type === 'added' || args.type === 'removed') {
           tokenSidebar.update();
         }
+        if (
+          (args.type === 'added' || args.type === 'removed') &&
+          args.id === JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND
+        ) {
+          void this._updateAskAILogEntryActionRegistration();
+        }
       });
       // add to the launcher
       if (launcher && (settings.composite.showIconInLauncher as boolean)) {
@@ -937,7 +942,6 @@ class PluginPlayground {
         for (const refresh of this._loadOnSaveToggleRefreshers) {
           refresh();
         }
-        void this._updateAskAILogEntryActionRegistration();
       });
 
       this._setupLogsBadge();
@@ -3487,8 +3491,7 @@ class PluginPlayground {
     this._askAILogEntryActionDisposable = null;
 
     if (
-      this.settings.get(ASK_AI_LOG_ENTRY_ACTION_ENABLED_SETTING).composite !==
-      true
+      !this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND)
     ) {
       return;
     }
