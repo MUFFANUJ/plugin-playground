@@ -18,7 +18,11 @@ import {
   ToolbarButton
 } from '@jupyterlab/apputils';
 
-import { ILogConsoleTracker } from 'jupyterlab-js-logs';
+import {
+  ILogConsoleTracker,
+  ILogEntryActionRegistry,
+  type ILogEntryActionMessage
+} from 'jupyterlab-js-logs';
 
 import { Signal } from '@lumino/signaling';
 
@@ -29,7 +33,6 @@ import { IFileBrowserFactory } from '@jupyterlab/filebrowser';
 
 import { ILauncher } from '@jupyterlab/launcher';
 import { IMainMenu } from '@jupyterlab/mainmenu';
-import { IChatTracker } from '@jupyter/chat';
 
 import {
   IFrame,
@@ -303,12 +306,16 @@ const LOAD_ON_SAVE_ENABLED_DESCRIPTION =
   'Toggle auto-loading this file as an extension on save';
 const LOAD_ON_SAVE_DISABLED_DESCRIPTION =
   'Auto load on save is available for JavaScript and TypeScript files';
-const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
+const JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND =
+  '@jupyterlite/ai:open-or-reveal-chat';
 const JUPYTERLITE_AI_OPEN_SETTINGS_COMMAND = '@jupyterlite/ai:open-settings';
-const JUPYTERLITE_AI_CHAT_PANEL_ID = '@jupyterlite/ai:chat-panel';
+const JUPYTERLITE_AI_SETTINGS_MODEL_PLUGIN_ID =
+  '@jupyterlite/ai:settings-model';
 const JUPYTERLITE_AI_INSTALL_HINT =
   'JupyterLite AI is unavailable. Install the jupyterlite-ai extension and reload the application.';
 const JUPYTERLITE_AI_PROVIDER_SETUP_HINT = 'No AI provider configured.';
+const ASK_AI_LOG_ENTRY_ACTION_ID = 'plugin-playground:ask-ai-log-entry';
+const LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH = 8000;
 type JupyterLiteAIErrorCode = 'install-unavailable' | 'provider-setup-required';
 type JupyterLiteAIChatOpenStatus =
   | 'opened'
@@ -376,7 +383,6 @@ class PluginPlayground {
     protected fileBrowserFactory: IFileBrowserFactory | null,
     launcher: ILauncher | null,
     protected documentManager: IDocumentManager | null,
-    protected chatTracker: IChatTracker | null,
     protected settings: ISettingRegistry.ISettings,
     protected requirejs: IRequireJS,
     toolbarWidgetRegistry: IToolbarWidgetRegistry,
@@ -903,6 +909,12 @@ class PluginPlayground {
         if (args.type === 'added' || args.type === 'removed') {
           tokenSidebar.update();
         }
+        if (
+          (args.type === 'added' || args.type === 'removed') &&
+          args.id === JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND
+        ) {
+          void this._updateAskAILogEntryActionRegistration();
+        }
       });
       // add to the launcher
       if (launcher && (settings.composite.showIconInLauncher as boolean)) {
@@ -944,6 +956,7 @@ class PluginPlayground {
       });
 
       this._setupLogsBadge();
+      void this._updateAskAILogEntryActionRegistration();
     });
   }
 
@@ -3383,37 +3396,36 @@ class PluginPlayground {
       commandArguments
     });
 
-    await this._openJupyterLiteAIChatPanel();
-
-    const inputModel = await this._requireJupyterLiteAIChatInputModel();
-    inputModel.value = prompt;
-    inputModel.focus();
-    window.requestAnimationFrame(() => {
-      const activeElement = document.activeElement;
-      if (
-        activeElement instanceof HTMLTextAreaElement ||
-        activeElement instanceof HTMLInputElement
-      ) {
-        const cursorIndex = activeElement.value.length;
-        activeElement.setSelectionRange(cursorIndex, cursorIndex);
-        activeElement.scrollTop = activeElement.scrollHeight;
-      }
-    });
+    await this._openOrRevealJupyterLiteAIChat({ input: prompt });
   }
 
-  private async _openJupyterLiteAIChatPanel(): Promise<void> {
-    if (!this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_CHAT_COMMAND)) {
+  private async _openOrRevealJupyterLiteAIChat(options?: {
+    input?: string;
+  }): Promise<void> {
+    if (
+      !this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND)
+    ) {
       throw new JupyterLiteAIError(
         'install-unavailable',
         JUPYTERLITE_AI_INSTALL_HINT
       );
     }
 
+    const args: {
+      area: 'side';
+      focus: true;
+      input?: string;
+    } = {
+      area: 'side',
+      focus: true
+    };
+    if (typeof options?.input === 'string') {
+      args.input = options.input;
+    }
+
     const openResult = await this.app.commands.execute(
-      JUPYTERLITE_AI_OPEN_CHAT_COMMAND,
-      {
-        area: 'side'
-      }
+      JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND,
+      args
     );
     if (openResult === false) {
       throw new JupyterLiteAIError(
@@ -3421,14 +3433,11 @@ class PluginPlayground {
         JUPYTERLITE_AI_PROVIDER_SETUP_HINT
       );
     }
-    this.app.shell.activateById(JUPYTERLITE_AI_CHAT_PANEL_ID);
   }
 
   private async _openJupyterLiteAIChatWithSetupFallback(): Promise<JupyterLiteAIChatOpenStatus> {
     try {
-      await this._openJupyterLiteAIChatPanel();
-      const inputModel = await this._requireJupyterLiteAIChatInputModel();
-      inputModel.focus();
+      await this._openOrRevealJupyterLiteAIChat();
       return 'opened';
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -3491,65 +3500,197 @@ class PluginPlayground {
     }
   }
 
-  private async _requireJupyterLiteAIChatInputModel(): Promise<{
-    value: string;
-    focus: () => void;
-  }> {
-    const chatTracker =
-      this.chatTracker ?? (await this.app.resolveOptionalService(IChatTracker));
-    if (!chatTracker) {
-      throw new JupyterLiteAIError(
-        'install-unavailable',
-        JUPYTERLITE_AI_INSTALL_HINT
-      );
+  private async _loadJupyterLiteAISettings(): Promise<ISettingRegistry.ISettings | null> {
+    if (this._jupyterLiteAISettings) {
+      return this._jupyterLiteAISettings;
+    }
+    if (this._jupyterLiteAISettingsLoadPromise) {
+      return this._jupyterLiteAISettingsLoadPromise;
     }
 
-    const maxAnimationFrameRetries = 3;
-    for (let attempt = 0; attempt <= maxAnimationFrameRetries; attempt++) {
-      const chatWidget =
-        chatTracker.currentWidget ?? chatTracker.find(() => true);
-      const inputModel = (
-        chatWidget as {
-          model?: {
-            input?: unknown;
-          };
-        } | null
-      )?.model?.input;
-      if (this._isJupyterLiteAIChatInputModel(inputModel)) {
-        return inputModel;
-      }
-
-      if (
-        typeof window === 'undefined' ||
-        attempt === maxAnimationFrameRetries
-      ) {
-        break;
-      }
-      await new Promise<void>(resolve => {
-        window.requestAnimationFrame(() => {
-          resolve();
+    this._jupyterLiteAISettingsLoadPromise = this.settingRegistry
+      .load(JUPYTERLITE_AI_SETTINGS_MODEL_PLUGIN_ID)
+      .then(settings => {
+        this._jupyterLiteAISettings = settings;
+        settings.changed.connect(() => {
+          void this._updateAskAILogEntryActionRegistration();
         });
+        return settings;
+      })
+      .catch(() => null)
+      .finally(() => {
+        this._jupyterLiteAISettingsLoadPromise = null;
       });
-    }
 
-    throw new JupyterLiteAIError(
-      'provider-setup-required',
-      JUPYTERLITE_AI_PROVIDER_SETUP_HINT
-    );
+    return this._jupyterLiteAISettingsLoadPromise;
   }
 
-  private _isJupyterLiteAIChatInputModel(candidate: unknown): candidate is {
-    value: string;
-    focus: () => void;
-  } {
-    return !!(
-      candidate &&
-      typeof candidate === 'object' &&
-      'value' in candidate &&
-      typeof candidate.value === 'string' &&
-      'focus' in candidate &&
-      typeof candidate.focus === 'function'
+  private async _hasConfiguredJupyterLiteAIProvider(): Promise<boolean> {
+    const aiSettings = await this._loadJupyterLiteAISettings();
+    if (!aiSettings) {
+      return false;
+    }
+
+    const providersValue = aiSettings.get('providers').composite;
+    if (!Array.isArray(providersValue) || providersValue.length === 0) {
+      return false;
+    }
+
+    const defaultProviderValue = aiSettings.get('defaultProvider').composite;
+    if (typeof defaultProviderValue !== 'string') {
+      return false;
+    }
+    const defaultProviderId = defaultProviderValue.trim();
+    if (!defaultProviderId) {
+      return false;
+    }
+
+    return providersValue.some(rawProvider => {
+      if (
+        !rawProvider ||
+        typeof rawProvider !== 'object' ||
+        Array.isArray(rawProvider)
+      ) {
+        return false;
+      }
+
+      const provider = rawProvider as Record<string, unknown>;
+      if (
+        typeof provider.id !== 'string' ||
+        typeof provider.provider !== 'string' ||
+        typeof provider.model !== 'string'
+      ) {
+        return false;
+      }
+
+      return (
+        provider.id.trim() === defaultProviderId &&
+        provider.provider.trim().length > 0 &&
+        provider.model.trim().length > 0
+      );
+    });
+  }
+
+  private async _updateAskAILogEntryActionRegistration(): Promise<void> {
+    const registrationEpoch = ++this._askAILogEntryActionRegistrationEpoch;
+    this._askAILogEntryActionDisposable?.dispose();
+    this._askAILogEntryActionDisposable = null;
+
+    if (
+      !this.app.commands.hasCommand(JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND)
+    ) {
+      return;
+    }
+    if (!(await this._hasConfiguredJupyterLiteAIProvider())) {
+      return;
+    }
+    try {
+      const disposable = await this._registerAskAILogEntryAction();
+      if (registrationEpoch !== this._askAILogEntryActionRegistrationEpoch) {
+        disposable?.dispose();
+        return;
+      }
+      this._askAILogEntryActionDisposable = disposable;
+    } catch (error) {
+      console.warn(
+        'Failed to update js-logs Ask AI action registration.',
+        error
+      );
+    }
+  }
+
+  private async _registerAskAILogEntryAction(): Promise<{
+    dispose: () => void;
+  } | null> {
+    const actionRegistry = await this.app.resolveOptionalService(
+      ILogEntryActionRegistry
     );
+    if (!actionRegistry) {
+      return null;
+    }
+
+    try {
+      return actionRegistry.register({
+        id: ASK_AI_LOG_ENTRY_ACTION_ID,
+        label: 'Ask AI',
+        caption: 'Open AI chat and include this log entry for debugging',
+        isVisible: message => {
+          if (message.level !== 'error' && message.level !== 'critical') {
+            return false;
+          }
+          return this._extractTextFromLogEntryMessage(message).length > 0;
+        },
+        execute: message => {
+          void this._openAIChatForLogEntry(message);
+        }
+      });
+    } catch (error) {
+      console.warn('Failed to register js-logs Ask AI action.', error);
+      return null;
+    }
+  }
+
+  private async _openAIChatForLogEntry(
+    message: ILogEntryActionMessage
+  ): Promise<void> {
+    try {
+      const prompt = this._buildLogEntryAIPrompt(message);
+      if (!prompt) {
+        return;
+      }
+      await this._openOrRevealJupyterLiteAIChat({ input: prompt });
+    } catch (error) {
+      const aiErrorCode =
+        error instanceof JupyterLiteAIError ? error.code : null;
+      if (
+        aiErrorCode === 'provider-setup-required' ||
+        aiErrorCode === 'install-unavailable'
+      ) {
+        await this._openJupyterLiteAIChatWithSetupFallback();
+        return;
+      }
+
+      const details = error instanceof Error ? error.message : String(error);
+      Notification.warning(
+        `Could not prepare AI chat from log entry: ${details}`,
+        {
+          autoClose: 5000
+        }
+      );
+    }
+  }
+
+  private _buildLogEntryAIPrompt(message: ILogEntryActionMessage): string {
+    const rawText = this._extractTextFromLogEntryMessage(message);
+    if (!rawText) {
+      return '';
+    }
+    if (rawText.length > LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH) {
+      return `${rawText.slice(0, LOG_ENTRY_PROMPT_MAX_OUTPUT_LENGTH)}\n...`;
+    }
+    return rawText;
+  }
+
+  private _extractTextFromLogEntryMessage(
+    message: ILogEntryActionMessage
+  ): string {
+    const rawData = message.output['data'];
+    if (
+      typeof rawData !== 'object' ||
+      rawData === null ||
+      Array.isArray(rawData)
+    ) {
+      return '';
+    }
+
+    const text = (rawData as Record<string, unknown>)['text/plain'];
+    if (typeof text === 'string') {
+      return text.trim();
+    }
+    if (Array.isArray(text) && text.every(item => typeof item === 'string')) {
+      return text.join('').trim();
+    }
+    return '';
   }
 
   private _buildCommandInsertAIPrompt(options: {
@@ -3916,6 +4057,11 @@ class PluginPlayground {
     string,
     ISettingRegistry.ISchema
   >();
+  private _jupyterLiteAISettings: ISettingRegistry.ISettings | null = null;
+  private _jupyterLiteAISettingsLoadPromise: Promise<ISettingRegistry.ISettings | null> | null =
+    null;
+  private _askAILogEntryActionRegistrationEpoch = 0;
+  private _askAILogEntryActionDisposable: { dispose: () => void } | null = null;
   private _commandInsertMode: CommandInsertMode = DEFAULT_COMMAND_INSERT_MODE;
   private _playgroundSidebar: SidePanel | null = null;
   private _tokenSidebar: TokenSidebar | null = null;
@@ -3942,8 +4088,7 @@ const mainPlugin: JupyterFrontEndPlugin<IPluginPlayground> = {
     IFileBrowserFactory,
     ILauncher,
     IDocumentManager,
-    ILogConsoleTracker,
-    IChatTracker
+    ILogConsoleTracker
   ],
   activate: (
     app: JupyterFrontEnd,
@@ -3955,8 +4100,7 @@ const mainPlugin: JupyterFrontEndPlugin<IPluginPlayground> = {
     fileBrowserFactory: IFileBrowserFactory | null,
     launcher: ILauncher | null,
     documentManager: IDocumentManager | null,
-    logConsoleTracker: ILogConsoleTracker | null,
-    chatTracker: IChatTracker | null
+    logConsoleTracker: ILogConsoleTracker | null
   ): IPluginPlayground => {
     if (completionManager) {
       completionManager.registerProvider(new CommandCompletionProvider(app));
@@ -3980,7 +4124,6 @@ const mainPlugin: JupyterFrontEndPlugin<IPluginPlayground> = {
         fileBrowserFactory,
         launcher,
         documentManager,
-        chatTracker,
         settings,
         requirejs,
         toolbarWidgetRegistry,

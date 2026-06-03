@@ -43,7 +43,8 @@ const FEDERATED_RUNTIME_PACKAGE = '@jupyterlab/plugin-playground';
 const FEDERATED_RUNTIME_CONSUMER_PLUGIN_ID = 'runtime-consumer-test:plugin';
 const FEDERATED_RUNTIME_CONSUMER_COMMAND = 'runtime-consumer-test:check';
 const FEDERATED_RUNTIME_CONSUMER_FILE = 'runtime-consumer-test.ts';
-const SHARED_RUNTIME_PACKAGE = '@jupyter/chat';
+const SHARED_RUNTIME_PACKAGE = 'jupyterlab-js-logs';
+const SHARED_RUNTIME_TOKEN_NAME = 'jupyterlab-js-logs:ILogEntryActionRegistry';
 const SHARED_RUNTIME_CONSUMER_PLUGIN_ID = 'shared-runtime-consumer-test:plugin';
 const SHARED_RUNTIME_CONSUMER_COMMAND = 'shared-runtime-consumer-test:check';
 const SHARED_RUNTIME_CONSUMER_FILE = 'shared-runtime-consumer-test.ts';
@@ -58,8 +59,14 @@ const CSS_IMPORT_TEST_UPDATED_COLOR = 'rgb(34, 68, 102)';
 const CSS_IMPORT_TEST_BROKEN_MODULE_ERROR = 'css import rollback test failure';
 const COMMAND_COMPLETION_FILE = 'command-completion.ts';
 const INVOKE_FILE_COMPLETER_COMMAND = 'completer:invoke-file';
-const JUPYTERLITE_AI_OPEN_CHAT_COMMAND = '@jupyterlite/ai:open-chat';
-const JUPYTERLITE_AI_CHAT_PANEL_ID = '@jupyterlite/ai:chat-panel';
+const JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND =
+  '@jupyterlite/ai:open-or-reveal-chat';
+const JUPYTERLITE_AI_SETTINGS_MODEL_PLUGIN_ID =
+  '@jupyterlite/ai:settings-model';
+const JS_LOGS_OPEN_COMMAND = 'js-logs:open';
+const TEST_JUPYTERLITE_AI_PROVIDER_ID = 'playground-test-provider';
+const ASK_AI_LOG_ENTRY_ACTION_CAPTION =
+  'Open AI chat and include this log entry for debugging';
 const PLAYGROUND_SIDEBAR_ID = 'jp-plugin-playground-sidebar';
 const TOKEN_SECTION_ID = 'jp-plugin-token-sidebar';
 const EXAMPLE_SECTION_ID = 'jp-plugin-example-sidebar';
@@ -391,13 +398,7 @@ async function ensureMockJupyterLiteAIChat(
   page: IJupyterLabPageFixture
 ): Promise<void> {
   await page.evaluate(
-    ({
-      commandId,
-      chatPanelId
-    }: {
-      commandId: string;
-      chatPanelId: string;
-    }) => {
+    ({ commandId }: { commandId: string }) => {
       const inputSelector =
         '.jp-chat-input-textfield[data-playground-test="ai-input"] textarea';
       const ensureInput = (): HTMLTextAreaElement => {
@@ -416,71 +417,16 @@ async function ensureMockJupyterLiteAIChat(
         return input;
       };
 
-      const inputModel = {
-        get value(): string {
-          return ensureInput().value;
-        },
-        set value(nextValue: string) {
-          const input = ensureInput();
-          input.value = nextValue;
+      const applyOpenArgs = (args?: any): void => {
+        const input = ensureInput();
+        if (typeof args?.input === 'string') {
+          input.value = args.input;
           input.dispatchEvent(new Event('input', { bubbles: true }));
           input.dispatchEvent(new Event('change', { bubbles: true }));
-        },
-        focus: () => {
-          ensureInput().focus();
         }
-      };
-
-      const app = window.jupyterapp as any;
-      const chatWidget = {
-        id: chatPanelId,
-        model: {
-          input: inputModel
+        if (args?.focus !== false) {
+          input.focus();
         }
-      };
-      app.__playgroundChatTracker = {
-        currentWidget: chatWidget,
-        find: (predicate: (widget: unknown) => boolean) =>
-          predicate(chatWidget) ? chatWidget : null
-      };
-      if (
-        !app.__playgroundOriginalResolveOptionalService &&
-        typeof app.resolveOptionalService === 'function'
-      ) {
-        app.__playgroundOriginalResolveOptionalService =
-          app.resolveOptionalService.bind(app);
-        app.resolveOptionalService = async (token: { name?: string }) => {
-          if (token?.name === '@jupyter/chat:IChatTracker') {
-            return app.__playgroundChatTracker;
-          }
-          return app.__playgroundOriginalResolveOptionalService(token);
-        };
-      }
-
-      const shell = window.jupyterapp.shell as any;
-      if (!shell.__playgroundOriginalWidgets) {
-        shell.__playgroundOriginalWidgets = shell.widgets.bind(shell);
-        shell.widgets = (area: string) => {
-          const originalWidgets = Array.from(
-            shell.__playgroundOriginalWidgets(area)
-          );
-          if (
-            (area === 'left' || area === 'right') &&
-            shell.__playgroundChatPanel
-          ) {
-            const chatPanel = shell.__playgroundChatPanel;
-            const widgetsWithoutChatPanel = originalWidgets.filter(
-              (widget: any) => widget?.id !== chatPanel.id
-            );
-            widgetsWithoutChatPanel.push(chatPanel);
-            return widgetsWithoutChatPanel[Symbol.iterator]();
-          }
-          return originalWidgets[Symbol.iterator]();
-        };
-      }
-      shell.__playgroundChatPanel = {
-        id: chatPanelId,
-        current: chatWidget
       };
 
       const commands = window.jupyterapp.commands;
@@ -490,8 +436,8 @@ async function ensureMockJupyterLiteAIChat(
           commands.execute.bind(commands);
         commands.execute = async (id: string, args?: any) => {
           if (id === commandId) {
-            ensureInput();
-            return undefined;
+            applyOpenArgs(args);
+            return true;
           }
           return commandRegistry.__playgroundOriginalExecute(id, args);
         };
@@ -500,9 +446,9 @@ async function ensureMockJupyterLiteAIChat(
         commands.addCommand(commandId, {
           label: 'JupyterLite AI test command',
           describedBy: { args: null },
-          execute: () => {
-            ensureInput();
-            return undefined;
+          execute: (args?: any) => {
+            applyOpenArgs(args);
+            return true;
           }
         });
       }
@@ -510,8 +456,7 @@ async function ensureMockJupyterLiteAIChat(
       ensureInput();
     },
     {
-      commandId: JUPYTERLITE_AI_OPEN_CHAT_COMMAND,
-      chatPanelId: JUPYTERLITE_AI_CHAT_PANEL_ID
+      commandId: JUPYTERLITE_AI_OPEN_OR_REVEAL_CHAT_COMMAND
     }
   );
 }
@@ -1409,7 +1354,7 @@ test('loads plugin importing shared module outside known module map', async ({
   const consumerPath = `${tmpPath}/${SHARED_RUNTIME_CONSUMER_FILE}`;
   expect(KNOWN_MODULE_NAMES).not.toContain(SHARED_RUNTIME_PACKAGE);
   const consumerSource = `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
-import { IChatCommandRegistry } from '${SHARED_RUNTIME_PACKAGE}';
+import { ILogEntryActionRegistry } from '${SHARED_RUNTIME_PACKAGE}';
 
 const plugin: JupyterFrontEndPlugin<void> = {
   id: '${SHARED_RUNTIME_CONSUMER_PLUGIN_ID}',
@@ -1417,7 +1362,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   activate: (app: JupyterFrontEnd) => {
     app.commands.addCommand('${SHARED_RUNTIME_CONSUMER_COMMAND}', {
       label: 'Shared Runtime Consumer Check',
-      execute: () => IChatCommandRegistry.name === '@jupyter/chat:IChatCommandRegistry'
+      execute: () => ILogEntryActionRegistry.name === '${SHARED_RUNTIME_TOKEN_NAME}'
     });
   }
 };
@@ -1485,7 +1430,7 @@ test('fails deterministically when required shared version is incompatible', asy
     packageJsonPath
   );
   const consumerSource = `import { JupyterFrontEnd, JupyterFrontEndPlugin } from '@jupyterlab/application';
-import { IChatCommandRegistry } from '${SHARED_RUNTIME_PACKAGE}';
+import { ILogEntryActionRegistry } from '${SHARED_RUNTIME_PACKAGE}';
 
 const plugin: JupyterFrontEndPlugin<void> = {
   id: '${SHARED_RUNTIME_INCOMPATIBLE_PLUGIN_ID}',
@@ -1493,7 +1438,7 @@ const plugin: JupyterFrontEndPlugin<void> = {
   activate: (app: JupyterFrontEnd) => {
     app.commands.addCommand('shared-runtime-incompatible-test:check', {
       label: 'Shared Runtime Incompatible Check',
-      execute: () => IChatCommandRegistry.name
+      execute: () => ILogEntryActionRegistry.name
     });
   }
 };
@@ -4577,6 +4522,143 @@ const run = (application: JupyterFrontEnd) => {
     const source = current.content.model.sharedModel.getSource();
     return source === expected;
   }, expectedSourceAfterInsert);
+});
+
+test.describe('JS logs Ask AI action', () => {
+  test.use({
+    mockSettings: {
+      ...galata.DEFAULT_SETTINGS,
+      [JUPYTERLITE_AI_SETTINGS_MODEL_PLUGIN_ID]: {
+        providers: [
+          {
+            id: TEST_JUPYTERLITE_AI_PROVIDER_ID,
+            name: 'Playground Test Provider',
+            provider: 'openai',
+            model: 'gpt-4o-mini'
+          }
+        ],
+        defaultProvider: TEST_JUPYTERLITE_AI_PROVIDER_ID
+      }
+    }
+  });
+
+  test('adds Ask AI button in log rows and prefills AI chat input', async ({
+    page
+  }) => {
+    const logMarker = `ask-ai-log-row-${Date.now()}`;
+    const warningMarker = `ask-ai-log-row-warning-${Date.now()}`;
+    const chatInput = page.locator(
+      '.jp-chat-input-textfield[data-playground-test="ai-input"] textarea'
+    );
+
+    await page.goto();
+    await ensureMockJupyterLiteAIChat(page);
+
+    const hasJSLogsCommand = await page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, JS_LOGS_OPEN_COMMAND);
+    test.skip(
+      !hasJSLogsCommand,
+      'jupyterlab-js-logs is required for JS log row actions.'
+    );
+
+    await page.evaluate((id: string) => {
+      const commands = window.jupyterapp.commands;
+      if (!commands.isToggled(id)) {
+        return commands.execute(id);
+      }
+      return undefined;
+    }, JS_LOGS_OPEN_COMMAND);
+
+    await page.evaluate((message: string) => {
+      console.warn(message);
+    }, warningMarker);
+
+    const warningRow = page.locator('.jp-OutputArea-child').filter({
+      hasText: warningMarker
+    });
+    await expect(warningRow).toHaveCount(1);
+    await expect(
+      warningRow.first().getByRole('button', {
+        name: ASK_AI_LOG_ENTRY_ACTION_CAPTION
+      })
+    ).toHaveCount(0);
+
+    await page.evaluate((message: string) => {
+      console.error(message);
+    }, logMarker);
+
+    const logRow = page.locator('.jp-OutputArea-child').filter({
+      hasText: logMarker
+    });
+    await expect(logRow).toHaveCount(1);
+    const askAIButton = logRow.first().getByRole('button', {
+      name: ASK_AI_LOG_ENTRY_ACTION_CAPTION
+    });
+    await expect(askAIButton).toBeVisible();
+
+    await askAIButton.click();
+    await expect(chatInput).toHaveValue(new RegExp(escapeRegExp(logMarker)));
+
+    await page.evaluate(() => {
+      document
+        .querySelector(
+          '.jp-chat-input-textfield[data-playground-test="ai-input"]'
+        )
+        ?.remove();
+    });
+  });
+});
+
+test.describe('JS logs Ask AI action without provider setup', () => {
+  test.use({
+    mockSettings: {
+      ...galata.DEFAULT_SETTINGS,
+      [JUPYTERLITE_AI_SETTINGS_MODEL_PLUGIN_ID]: {
+        providers: [],
+        defaultProvider: ''
+      }
+    }
+  });
+
+  test('does not add Ask AI button when no AI provider is configured', async ({
+    page
+  }) => {
+    const logMarker = `ask-ai-log-row-no-provider-${Date.now()}`;
+
+    await page.goto();
+    await ensureMockJupyterLiteAIChat(page);
+
+    const hasJSLogsCommand = await page.evaluate((id: string) => {
+      return window.jupyterapp.commands.hasCommand(id);
+    }, JS_LOGS_OPEN_COMMAND);
+    test.skip(
+      !hasJSLogsCommand,
+      'jupyterlab-js-logs is required for JS log row actions.'
+    );
+
+    await page.evaluate((id: string) => {
+      const commands = window.jupyterapp.commands;
+      if (!commands.isToggled(id)) {
+        return commands.execute(id);
+      }
+      return undefined;
+    }, JS_LOGS_OPEN_COMMAND);
+
+    await page.evaluate((message: string) => {
+      console.error(message);
+    }, logMarker);
+
+    const logRow = page.locator('.jp-OutputArea-child').filter({
+      hasText: logMarker
+    });
+    await expect(logRow).toHaveCount(1);
+    await expect(
+      logRow.first().getByRole('button', {
+        name: ASK_AI_LOG_ENTRY_ACTION_CAPTION
+      })
+    ).toHaveCount(0);
+  });
 });
 
 test('commands tab can prompt JupyterLite AI and remember last insertion mode', async ({
