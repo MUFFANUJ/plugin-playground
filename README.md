@@ -350,17 +350,16 @@ You can repeat `fromURL` to open multiple files in one launch.
 
 ### Development install
 
-You will need NodeJS to build the extension package.
+You will need NodeJS to build the extension package. Hatch creates and manages
+the development virtual environment.
 
 ```bash
 # Clone the repo to your local environment
 # Change directory to the jupyterlab-plugin-playground directory
-# Install package in development mode
-pip install -e .
-# Link your development version of the extension with JupyterLab
-jupyter labextension develop . --overwrite
-# Rebuild extension Typescript source after making changes
-jlpm run build
+# One-time global install
+pip install hatch
+# Create the development environment and install the extension
+hatch run dev:install
 ```
 
 ### Pre-commit hooks
@@ -387,9 +386,9 @@ You can watch the source directory and run JupyterLab at the same time in differ
 
 ```bash
 # Watch the source directory in one terminal, automatically rebuilding when needed
-jlpm run watch
+hatch run dev:watch
 # Run JupyterLab in another terminal
-jupyter lab
+hatch run dev:lab
 ```
 
 With the watch command running, every saved change will immediately be built locally and available in your running JupyterLab. Refresh JupyterLab to load the change in your browser (you may need to wait several seconds for the extension to be rebuilt).

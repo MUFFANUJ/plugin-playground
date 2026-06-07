@@ -32,6 +32,22 @@ source = "nodejs"
 [tool.hatch.metadata.hooks.nodejs]
 fields = ["description", "authors", "urls"]
 
+[tool.hatch.envs.dev]
+dependencies = [
+    "jupyterlab>=4.0.0,<5.0.0",
+]
+skip-install = true
+
+[tool.hatch.envs.dev.scripts]
+install = [
+    "python -m pip install -e .",
+    "jupyter labextension develop . --overwrite",
+    "jlpm install",
+    "jlpm run build",
+]
+lab = "jupyter lab"
+watch = "jlpm run watch"
+
 [tool.hatch.build.targets.sdist]
 artifacts = [
     "jupyterlab_plugin_playground/labextension",
