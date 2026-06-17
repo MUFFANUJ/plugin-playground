@@ -1,4 +1,4 @@
-import type { Token } from '@lumino/coreutils';
+import { Token } from '@lumino/coreutils';
 import {
   createJavaScriptKernelVfsStartupModuleUrl,
   JAVASCRIPT_KERNEL_VFS_LSP_TARGET_EXPORT
@@ -7,10 +7,6 @@ import { JAVASCRIPT_KERNEL_LSP_COMM_TARGET } from './constants';
 
 const JAVASCRIPT_KERNEL_VFS_STARTUP_EXTENSION_ID =
   '@jupyterlab/plugin-playground:javascript-kernel-vfs-lsp';
-
-declare const require: {
-  (module: string): { IJavaScriptKernelStartup: unknown };
-};
 
 interface IJavaScriptKernelStartupRegistry {
   registerStartupExtension(extension: {
@@ -23,11 +19,9 @@ interface IJavaScriptKernelStartupRegistry {
   }): void;
 }
 
-const IJavaScriptKernelStartup = (
-  require('@jupyterlite/javascript-kernel') as {
-    IJavaScriptKernelStartup: Token<IJavaScriptKernelStartupRegistry>;
-  }
-).IJavaScriptKernelStartup;
+const IJavaScriptKernelStartup = new Token<IJavaScriptKernelStartupRegistry>(
+  '@jupyterlite/javascript-kernel:IJavaScriptKernelStartup'
+);
 
 function setupJavaScriptKernelVfs(
   startup: IJavaScriptKernelStartupRegistry
