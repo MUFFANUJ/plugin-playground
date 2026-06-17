@@ -52,7 +52,6 @@ import { PluginLoader, PluginLoadingError } from './loader';
 
 import { PluginTranspiler } from './transpiler';
 
-import { JavaScriptKernelVfsInjectionController } from './javascript-kernel-vfs/injection';
 import { javaScriptKernelLspPlugins } from './javascript-kernel-lsp/integration';
 
 import { loadKnownModule } from './modules';
@@ -393,7 +392,6 @@ class PluginPlayground {
     protected logConsoleTracker: ILogConsoleTracker | null
   ) {
     registerCoreKnownModules();
-    new JavaScriptKernelVfsInjectionController(this.app).setup();
     this._layoutHideFromInitialUrl =
       typeof window !== 'undefined'
         ? this._layoutHideSelectionFromUrl(window.location.href)

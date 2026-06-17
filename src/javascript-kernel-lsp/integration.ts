@@ -8,8 +8,12 @@ import {
   type TSessionMap,
   type TSpecsMap
 } from '@jupyterlab/lsp';
-import type { Kernel, ServerConnection } from '@jupyterlab/services';
-import { executeJavaScriptKernelVfsInitCode } from '../javascript-kernel-vfs/common';
+import type { Kernel } from '@jupyterlab/services';
+import {
+  javaScriptKernelStartupToken,
+  setupJavaScriptKernelVfs,
+  type IJavaScriptKernelStartupRegistry
+} from '../javascript-kernel-vfs/startup';
 import {
   JAVASCRIPT_KERNEL_LSP_COMM_TARGET,
   JAVASCRIPT_KERNEL_LSP_LANGUAGES,
@@ -32,43 +36,21 @@ const JAVASCRIPT_KERNEL_LSP_MIME_TYPE_LIST: [string, ...string[]] = [
   ...JAVASCRIPT_KERNEL_LSP_MIME_TYPES
 ];
 
-/**
- * Probe code used to confirm kernel-side LSP comm registration is ready.
- */
-const JAVASCRIPT_KERNEL_LSP_BOOTSTRAP_PROBE_CODE = `(() => {
-  if (globalThis.__pluginPlaygroundTypeScriptLspRegistered !== true) {
-    throw new Error("__PP_KERNEL_LSP_NOT_READY__");
-  }
-  if (globalThis.__pluginPlaygroundTypeScriptLspServerId !== ${JSON.stringify(
-    JAVASCRIPT_KERNEL_LSP_SERVER_ID
-  )}) {
-    throw new Error("__PP_KERNEL_LSP_SERVER_ID_MISMATCH__");
-  }
-})();`;
-
 let sharedJavaScriptKernelConnection: Kernel.IKernelConnection | null = null;
-let kernelLspBootstrapWarmup: Promise<void> | null = null;
 const kernelLspErrorMessages = new Set<string>();
 
-/**
- * Private fields used by `LanguageServerManager` in `@jupyterlab/lsp`.
- */
-interface ILanguageServerManagerPrivate {
-  readonly settings: ServerConnection.ISettings;
-  readonly sessions: TSessionMap;
-  readonly isEnabled: boolean;
+interface ILanguageServerManagerWithProviders {
   fetchSessions(): Promise<void>;
-  _settings: ServerConnection.ISettings;
-  _sessions: TSessionMap;
-  _specs: TSpecsMap;
-  _statusCode: number;
-  _ready: {
-    resolve(value: void | PromiseLike<void>): void;
-  };
-  _sessionsChanged: {
-    emit(args: void): void;
-  };
-  __pluginPlaygroundKernelLspPatched?: boolean;
+  registerProvider(provider: ILanguageServerProvider): void;
+}
+
+interface ILanguageServerProvider {
+  fetch(): Promise<{
+    sessions: TSessionMap;
+    specs: TSpecsMap;
+    statusCode: number;
+    transport: Record<string, (options: { socketUrl: string }) => WebSocket>;
+  }>;
 }
 
 function reportKernelLspError(message: string, error: unknown): void {
@@ -88,8 +70,7 @@ function reportKernelLspError(message: string, error: unknown): void {
  * Resolve a JavaScript kernel connection for comm-based LSP transport.
  *
  * A dedicated kernel is started for the current app lifecycle so the transport
- * is deterministic and does not depend on pre-existing running kernels that
- * may carry stale in-memory bootstrap state from earlier builds.
+ * is deterministic and does not depend on pre-existing running kernels.
  */
 async function resolveJavaScriptKernelConnection(
   app: JupyterFrontEnd
@@ -126,63 +107,6 @@ async function resolveJavaScriptKernelConnection(
       `Could not start JavaScript kernel "${JAVASCRIPT_PRIMARY_KERNEL_SPEC_NAME}" for LSP comm transport. ${message}`
     );
   }
-}
-
-/**
- * Wait until kernel-side LSP comm target registration is available.
- */
-async function ensureKernelLspBootstrapReady(
-  kernelConnection: Kernel.IKernelConnection
-): Promise<void> {
-  const initContent = await executeJavaScriptKernelVfsInitCode(
-    kernelConnection
-  );
-  if (initContent.status !== 'ok') {
-    const errorName = initContent.ename || 'KernelBootstrapError';
-    const errorValue =
-      initContent.evalue || 'Kernel bootstrap returned non-ok status.';
-    throw new Error(`${errorName}: ${errorValue}`);
-  }
-
-  const future = kernelConnection.requestExecute(
-    {
-      code: JAVASCRIPT_KERNEL_LSP_BOOTSTRAP_PROBE_CODE,
-      silent: true,
-      store_history: false,
-      allow_stdin: false
-    },
-    true
-  );
-  const reply = await future.done;
-  const content = reply.content as {
-    status?: string;
-    ename?: string;
-    evalue?: string;
-  };
-  if (content.status === 'ok') {
-    return;
-  }
-
-  const errorName = content.ename || 'KernelLspProbeError';
-  const errorValue =
-    content.evalue ||
-    'Kernel LSP probe returned non-ok status after bootstrap.';
-  throw new Error(`${errorName}: ${errorValue}`);
-}
-
-/**
- * Pre-start and bootstrap the dedicated JavaScript kernel early so initial
- * editor interactions do not race with transport startup.
- */
-function warmupKernelLspBootstrap(app: JupyterFrontEnd): Promise<void> {
-  if (kernelLspBootstrapWarmup) {
-    return kernelLspBootstrapWarmup;
-  }
-  kernelLspBootstrapWarmup = (async () => {
-    const kernelConnection = await resolveJavaScriptKernelConnection(app);
-    await ensureKernelLspBootstrapReady(kernelConnection);
-  })();
-  return kernelLspBootstrapWarmup;
 }
 
 /**
@@ -236,7 +160,6 @@ function createKernelLspWebSocketClass(app: JupyterFrontEnd): typeof WebSocket {
       }
 
       const kernelConnection = await resolveJavaScriptKernelConnection(app);
-      await ensureKernelLspBootstrapReady(kernelConnection);
 
       const commChannel = kernelConnection.createComm(
         JAVASCRIPT_KERNEL_LSP_COMM_TARGET
@@ -244,11 +167,7 @@ function createKernelLspWebSocketClass(app: JupyterFrontEnd): typeof WebSocket {
       this._commChannel = commChannel;
 
       commChannel.onMsg = message => {
-        const data = message.content.data as { payload?: unknown };
-        const payload =
-          typeof data?.payload === 'string'
-            ? data.payload
-            : JSON.stringify(data?.payload ?? data);
+        const { payload } = message.content.data as { payload: string };
         if (this.onmessage) {
           this.onmessage.call(
             this as unknown as WebSocket,
@@ -350,136 +269,43 @@ function createKernelLspWebSocketClass(app: JupyterFrontEnd): typeof WebSocket {
   return KernelLspWebSocket as unknown as typeof WebSocket;
 }
 
-/**
- * Patch the existing LanguageServerManager instance so it exposes a
- * deterministic in-kernel TypeScript LSP endpoint over comms for Lite mode.
- */
-function patchLanguageServerManagerForKernelComms(
+function registerKernelLspProvider(
   app: JupyterFrontEnd,
-  connectionManager: { languageServerManager: unknown }
+  languageServerManager: ILanguageServerManagerWithProviders
 ): void {
-  const languageServerManager =
-    connectionManager.languageServerManager as unknown as ILanguageServerManagerPrivate;
-
-  if (languageServerManager.__pluginPlaygroundKernelLspPatched) {
-    return;
-  }
-
-  languageServerManager.__pluginPlaygroundKernelLspPatched = true;
-
-  const documentConnectionManager = connectionManager as {
-    connect?: (...args: any[]) => Promise<any>;
-    connections?: Map<string, unknown>;
-    __pluginPlaygroundKernelLspConnectLogged?: boolean;
-    __pluginPlaygroundKernelLspPendingConnects?: Map<string, Promise<any>>;
+  const spec = {
+    display_name: 'TypeScript (JavaScript Kernel)',
+    languages: JAVASCRIPT_KERNEL_LSP_LANGUAGE_LIST,
+    mime_types: JAVASCRIPT_KERNEL_LSP_MIME_TYPE_LIST,
+    requires_documents_on_disk: false,
+    version: 2 as const
   };
-  if (
-    !documentConnectionManager.__pluginPlaygroundKernelLspConnectLogged &&
-    typeof documentConnectionManager.connect === 'function'
-  ) {
-    const originalConnect = documentConnectionManager.connect.bind(
-      documentConnectionManager
-    );
-    documentConnectionManager.connect = async (...args: any[]) => {
-      const options = args[0] as {
-        language?: string;
-        virtualDocument?: { uri?: string; documentInfo?: { uri?: string } };
-        hasLspSupportedFile?: boolean;
-      };
-      const virtualUri =
-        options?.virtualDocument?.uri ||
-        options?.virtualDocument?.documentInfo?.uri ||
-        '';
-      const existingConnection = virtualUri
-        ? documentConnectionManager.connections?.get(virtualUri)
-        : undefined;
-      if (existingConnection) {
-        return existingConnection;
-      }
-      if (
-        !documentConnectionManager.__pluginPlaygroundKernelLspPendingConnects
-      ) {
-        documentConnectionManager.__pluginPlaygroundKernelLspPendingConnects =
-          new Map<string, Promise<any>>();
-      }
-      const pendingConnect = virtualUri
-        ? documentConnectionManager.__pluginPlaygroundKernelLspPendingConnects.get(
-            virtualUri
-          )
-        : undefined;
-      if (pendingConnect) {
-        return pendingConnect;
-      }
-      const connectPromise = originalConnect(...args);
-      if (virtualUri) {
-        documentConnectionManager.__pluginPlaygroundKernelLspPendingConnects.set(
-          virtualUri,
-          connectPromise
-        );
-      }
-      try {
-        return await connectPromise;
-      } finally {
-        if (virtualUri) {
-          documentConnectionManager.__pluginPlaygroundKernelLspPendingConnects.delete(
-            virtualUri
-          );
-        }
-      }
-    };
-    documentConnectionManager.__pluginPlaygroundKernelLspConnectLogged = true;
-  }
-
-  const defaultSettings = languageServerManager.settings;
-  const kernelWebSocket = createKernelLspWebSocketClass(app);
-
-  languageServerManager.fetchSessions = async (): Promise<void> => {
-    if (!languageServerManager.isEnabled) {
-      return;
-    }
-
-    const spec = {
-      display_name: 'TypeScript (JavaScript Kernel)',
-      languages: JAVASCRIPT_KERNEL_LSP_LANGUAGE_LIST,
-      mime_types: JAVASCRIPT_KERNEL_LSP_MIME_TYPE_LIST,
-      requires_documents_on_disk: false,
-      version: 2 as const
-    };
-
-    languageServerManager._settings = {
-      ...defaultSettings,
-      WebSocket: kernelWebSocket
-    };
-    languageServerManager._specs = new Map([
-      [JAVASCRIPT_KERNEL_LSP_SERVER_ID, spec]
-    ]);
-    languageServerManager._sessions = new Map([
-      [
-        JAVASCRIPT_KERNEL_LSP_SERVER_ID,
-        {
-          handler_count: 1,
-          last_handler_message_at: null,
-          last_server_message_at: null,
-          status: 'started',
-          spec
-        }
-      ]
-    ]);
-    languageServerManager._statusCode = 200;
-    languageServerManager._sessionsChanged.emit(void 0);
-    languageServerManager._ready.resolve(undefined);
+  const session = {
+    handler_count: 1,
+    last_handler_message_at: null,
+    last_server_message_at: null,
+    status: 'started',
+    spec
   };
+  const KernelLspWebSocket = createKernelLspWebSocketClass(app);
+
+  languageServerManager.registerProvider({
+    fetch: async () => ({
+      statusCode: 200,
+      specs: new Map([[JAVASCRIPT_KERNEL_LSP_SERVER_ID, spec]]) as TSpecsMap,
+      sessions: new Map([
+        [JAVASCRIPT_KERNEL_LSP_SERVER_ID, session]
+      ]) as TSessionMap,
+      transport: {
+        [JAVASCRIPT_KERNEL_LSP_SERVER_ID]: options =>
+          new KernelLspWebSocket(options.socketUrl)
+      }
+    })
+  });
 
   void languageServerManager.fetchSessions().catch(error => {
     reportKernelLspError(
-      'Failed to initialize JavaScript kernel LSP manager sessions.',
-      error
-    );
-  });
-
-  void warmupKernelLspBootstrap(app).catch(error => {
-    reportKernelLspError(
-      'Failed to pre-warm JavaScript kernel LSP bootstrap.',
+      'Failed to initialize JavaScript kernel LSP provider sessions.',
       error
     );
   });
@@ -493,27 +319,48 @@ const javaScriptKernelLspCommsPlugin: JupyterFrontEndPlugin<void> = {
   description:
     'Routes JupyterLab LSP WebSocket traffic through JavaScript kernel comms in Lite deployments.',
   autoStart: true,
-  requires: [ILSPDocumentConnectionManager],
+  requires: [ILSPDocumentConnectionManager, javaScriptKernelStartupToken],
+  // eslint-disable-next-line jupyter/plugin-activation-args
   activate: (
     app: JupyterFrontEnd,
-    connectionManager: ILSPDocumentConnectionManager
+    connectionManager: ILSPDocumentConnectionManager,
+    javaScriptKernelStartupToken: IJavaScriptKernelStartupRegistry
   ): void => {
+    setupJavaScriptKernelVfs(javaScriptKernelStartupToken);
+
     const kernelspecManager = app.serviceManager.kernelspecs;
-    const patchIfJavaScriptKernelSpecAvailable = (): boolean => {
+    let languageServerProviderRegistered = false;
+    const registerIfJavaScriptKernelSpecAvailable = (): boolean => {
       const kernelspecs = kernelspecManager.specs?.kernelspecs;
       if (!kernelspecs || !kernelspecs[JAVASCRIPT_PRIMARY_KERNEL_SPEC_NAME]) {
         return false;
       }
-      patchLanguageServerManagerForKernelComms(app, connectionManager);
+      if (languageServerProviderRegistered) {
+        return true;
+      }
+      try {
+        const languageServerManager = (
+          connectionManager as unknown as {
+            languageServerManager: ILanguageServerManagerWithProviders;
+          }
+        ).languageServerManager;
+        registerKernelLspProvider(app, languageServerManager);
+        languageServerProviderRegistered = true;
+      } catch (error) {
+        reportKernelLspError(
+          'Failed to register JavaScript kernel LSP provider.',
+          error
+        );
+      }
       return true;
     };
 
-    if (patchIfJavaScriptKernelSpecAvailable()) {
+    if (registerIfJavaScriptKernelSpecAvailable()) {
       return;
     }
 
     const onKernelSpecsChanged = (): void => {
-      if (!patchIfJavaScriptKernelSpecAvailable()) {
+      if (!registerIfJavaScriptKernelSpecAvailable()) {
         return;
       }
       kernelspecManager.specsChanged.disconnect(onKernelSpecsChanged);

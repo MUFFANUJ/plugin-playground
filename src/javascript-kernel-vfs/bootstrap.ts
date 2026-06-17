@@ -1,9 +1,5 @@
 import typeScriptSource from '!!raw-loader!typescript/lib/typescript.js';
 import typeScriptVfsGlobalsSource from '!!raw-loader!@typescript/vfs/dist/vfs.globals.js';
-import {
-  JAVASCRIPT_KERNEL_LSP_COMM_TARGET,
-  JAVASCRIPT_KERNEL_LSP_SERVER_ID
-} from './constants';
 
 declare const require: {
   context(
@@ -108,31 +104,10 @@ export function createJavaScriptKernelVfsInitCode(): string {
     );
   }
   // Step 5: register a comm-based TypeScript LSP endpoint in the kernel.
-  if (!globalThis.__pluginPlaygroundTypeScriptLspRegistered) {
-    const kernelLspCommTarget = ${JSON.stringify(
-      JAVASCRIPT_KERNEL_LSP_COMM_TARGET
-    )};
-    const hasUsableKernelCommManager = candidate => {
-      return (
-        !!candidate &&
-        typeof candidate === "object" &&
-        typeof candidate.registerTarget === "function"
-      );
-    };
-
-    const ts = globalThis.vfsBundledTs;
-    const vfsApi = globalThis.vfs;
-    const createDefaultMap = globalThis.vfsCreateDefaultMapFromBundledLibs;
-    const commManager = globalThis.Jupyter && globalThis.Jupyter.comm;
-    if (
-      !hasUsableTypeScript(ts) ||
-      !hasUsableTypeScriptVfs(vfsApi) ||
-      typeof createDefaultMap !== "function" ||
-      !hasUsableKernelCommManager(commManager)
-    ) {
-      globalThis.__pluginPlaygroundTypeScriptLspRegistered = false;
-    } else {
-      const docStateByUri = new Map();
+  const ts = globalThis.vfsBundledTs;
+  const vfsApi = globalThis.vfs;
+  const createDefaultMap = globalThis.vfsCreateDefaultMapFromBundledLibs;
+  const docStateByUri = new Map();
       const uriByPath = new Map();
       let environment = null;
       let environmentDirty = true;
@@ -249,11 +224,8 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const offsetFromPosition = (text, position) => {
-        const line = Math.max(0, position && typeof position.line === "number" ? position.line : 0);
-        const character = Math.max(
-          0,
-          position && typeof position.character === "number" ? position.character : 0
-        );
+        const line = Math.max(0, position.line);
+        const character = Math.max(0, position.character);
         const starts = lineStartsForText(text);
         if (line >= starts.length) {
           return text.length;
@@ -263,27 +235,9 @@ export function createJavaScriptKernelVfsInitCode(): string {
         return Math.max(lineStart, Math.min(lineStart + character, lineEnd));
       };
 
-      const isLspPosition = value => {
-        return (
-          !!value &&
-          typeof value === "object" &&
-          typeof value.line === "number" &&
-          typeof value.character === "number"
-        );
-      };
-
       const applyLspContentChange = (currentText, change) => {
-        if (!change || typeof change.text !== "string") {
-          return currentText;
-        }
-
         const range = change.range;
-        if (
-          !range ||
-          typeof range !== "object" ||
-          !isLspPosition(range.start) ||
-          !isLspPosition(range.end)
-        ) {
+        if (!range) {
           return change.text;
         }
 
@@ -300,7 +254,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const applyLspContentChanges = (currentText, contentChanges) => {
-        if (!Array.isArray(contentChanges) || contentChanges.length === 0) {
+        if (contentChanges.length === 0) {
           return currentText;
         }
         let nextText = currentText;
@@ -541,25 +495,16 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const updateDocumentFromNotification = params => {
-        if (!params || !params.textDocument || typeof params.textDocument.uri !== "string") {
-          return null;
-        }
         const uri = params.textDocument.uri;
-        const languageId =
-          typeof params.textDocument.languageId === "string"
-            ? params.textDocument.languageId
-            : "typescript";
+        const languageId = params.textDocument.languageId || "typescript";
         const currentState = docStateByUri.get(uri);
         const path = currentState
           ? currentState.path
           : ensurePathForDocument(uri, languageId);
         let text = currentState ? currentState.text : "";
-        if (typeof params.textDocument.text === "string") {
+        if ("text" in params.textDocument) {
           text = params.textDocument.text;
-        } else if (
-          Array.isArray(params.contentChanges) &&
-          params.contentChanges.length > 0
-        ) {
+        } else if (params.contentChanges) {
           text = applyLspContentChanges(text, params.contentChanges);
         }
         if (
@@ -583,11 +528,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const uriFromParams = params => {
-        const textDocument = params && params.textDocument;
-        if (!textDocument || typeof textDocument.uri !== "string") {
-          return "";
-        }
-        return textDocument.uri;
+        return params.textDocument.uri;
       };
 
       const stateFromParams = params => {
@@ -610,7 +551,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return { isIncomplete: false, items: [] };
         }
-        const position = params && params.position;
+        const position = params.position;
         const state = requestState.state;
         const env = ensureEnvironment();
         const offset = offsetFromPosition(state.text, position);
@@ -641,7 +582,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return null;
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -717,7 +658,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return null;
         }
-        const position = params && params.position;
+        const position = params.position;
         const state = requestState.state;
 
         const env = ensureEnvironment();
@@ -727,7 +668,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
           offset,
           {
             triggerReason: signatureHelpTriggerReasonFromLspContext(
-              params && params.context
+              params.context
             )
           }
         );
@@ -816,7 +757,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return [];
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -831,7 +772,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return [];
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -846,7 +787,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return [];
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -861,7 +802,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return [];
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -885,7 +826,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return [];
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -966,7 +907,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return null;
         }
-        const position = params && params.position;
+        const position = params.position;
         const uri = requestState.uri;
         const state = requestState.state;
         const env = ensureEnvironment();
@@ -994,9 +935,8 @@ export function createJavaScriptKernelVfsInitCode(): string {
         if (!requestState) {
           return null;
         }
-        const position = params && params.position;
-        const newName =
-          params && typeof params.newName === "string" ? params.newName : "";
+        const position = params.position;
+        const newName = params.newName;
         if (!newName.trim()) {
           return null;
         }
@@ -1047,10 +987,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const handleWorkspaceSymbolRequest = params => {
-        const query =
-          params && typeof params.query === "string"
-            ? params.query.trim().toLowerCase()
-            : "";
+        const query = params.query.trim().toLowerCase();
         const env = ensureEnvironment();
         const symbols = [];
         const limit = 250;
@@ -1112,14 +1049,12 @@ export function createJavaScriptKernelVfsInitCode(): string {
       };
 
       const handleKernelLspMessage = (comm, payload) => {
-        let message = payload;
-        if (typeof payload === "string") {
-          try {
-            message = JSON.parse(payload);
-          } catch {
-            sendErrorResponse(comm, null, -32700, "Parse error");
-            return;
-          }
+        let message;
+        try {
+          message = JSON.parse(payload);
+        } catch {
+          sendErrorResponse(comm, null, -32700, "Parse error");
+          return;
         }
         if (!message || typeof message !== "object") {
           sendErrorResponse(comm, null, -32600, "Invalid Request");
@@ -1130,7 +1065,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
           ? message.id
           : undefined;
         const method = message.method;
-        const params = message.params || {};
+        const params = message.params;
 
         if (typeof method !== "string") {
           if (id !== undefined) {
@@ -1198,36 +1133,25 @@ export function createJavaScriptKernelVfsInitCode(): string {
             return;
           }
           if (method === "textDocument/didSave") {
-            const uri = updateDocumentFromNotification(params) || uriFromParams(params) || null;
-            if (uri) {
-              publishDiagnostics(comm, uri);
-            }
+            publishDiagnostics(comm, updateDocumentFromNotification(params));
             return;
           }
           if (method === "textDocument/didClose") {
-            if (
-              params &&
-              params.textDocument &&
-              typeof params.textDocument.uri === "string"
-            ) {
-              sendMessage(comm, {
-                jsonrpc: "2.0",
-                method: "textDocument/publishDiagnostics",
-                params: {
-                  uri: params.textDocument.uri,
-                  diagnostics: []
-                }
-              });
-              const closedState = docStateByUri.get(params.textDocument.uri);
-              if (
-                closedState &&
-                uriByPath.get(closedState.path) === params.textDocument.uri
-              ) {
-                uriByPath.delete(closedState.path);
+            const uri = params.textDocument.uri;
+            sendMessage(comm, {
+              jsonrpc: "2.0",
+              method: "textDocument/publishDiagnostics",
+              params: {
+                uri,
+                diagnostics: []
               }
-              docStateByUri.delete(params.textDocument.uri);
-              environmentDirty = true;
+            });
+            const closedState = docStateByUri.get(uri);
+            if (closedState && uriByPath.get(closedState.path) === uri) {
+              uriByPath.delete(closedState.path);
             }
+            docStateByUri.delete(uri);
+            environmentDirty = true;
             return;
           }
           if (method === "textDocument/completion") {
@@ -1235,7 +1159,7 @@ export function createJavaScriptKernelVfsInitCode(): string {
             return;
           }
           if (method === "completionItem/resolve") {
-            sendResponse(comm, id, params || null);
+            sendResponse(comm, id, params);
             return;
           }
           if (method === "textDocument/hover") {
@@ -1301,30 +1225,13 @@ export function createJavaScriptKernelVfsInitCode(): string {
         }
       };
 
-      commManager.registerTarget(kernelLspCommTarget, comm => {
+      const registerPluginPlaygroundTypeScriptLspTarget = comm => {
         comm.onMsg = message => {
-          const data =
-            message &&
-            typeof message === "object" &&
-            message.content &&
-            typeof message.content === "object" &&
-            message.content.data &&
-            typeof message.content.data === "object"
-              ? message.content.data
-              : message;
-          const payload =
-            data && Object.prototype.hasOwnProperty.call(data, "payload")
-              ? data.payload
-              : data;
-          handleKernelLspMessage(comm, payload);
+          handleKernelLspMessage(comm, message.content.data.payload);
         };
-      });
+      };
 
-      globalThis.__pluginPlaygroundTypeScriptLspServerId = ${JSON.stringify(
-        JAVASCRIPT_KERNEL_LSP_SERVER_ID
-      )};
-      globalThis.__pluginPlaygroundTypeScriptLspRegistered = true;
-    }
-  }
+      globalThis.__pluginPlaygroundRegisterTypeScriptLspTarget =
+        registerPluginPlaygroundTypeScriptLspTarget;
 })();`;
 }
