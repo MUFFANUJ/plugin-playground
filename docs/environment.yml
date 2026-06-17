@@ -18,7 +18,7 @@ dependencies:
   - jupyterlite-core>=0.7.0,<0.8
   - jupyterlite-sphinx>=0.22.0,<0.23
   - jupyterlite-pyodide-kernel>=0.7.0,<0.8
-  - nodejs=18
+  - nodejs>=22.12,<23
   - pip:
       - build
       - git+https://github.com/MUFFANUJ/jupyterlab.git@providerRegistration
