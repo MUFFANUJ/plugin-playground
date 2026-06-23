@@ -4,6 +4,9 @@ build:
   os: "ubuntu-24.04"
   tools:
     python: "mambaforge-4.10"
+  jobs:
+    post_create_environment:
+      - python -m pip install --force-reinstall --no-deps --no-build-isolation -r docs/upstream-pr-requirements.txt
 
 conda:
   environment: docs/environment.yml

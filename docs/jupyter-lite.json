@@ -12,10 +12,6 @@
       "@jupyter-ai-contrib/server-documents",
       "@jupyter-ai-contrib/server-documents:rtc-global-awareness",
       "jupyterlab-chat-extension",
-      "@jupyterlab/notebook-extension:language-server",
-      "@jupyterlab/fileeditor-extension:language-server",
-      "@jupyterlab/completer-extension:base-service",
-      "@jupyterlab/lsp-extension:settings",
       "@jupyterlite/application-extension:service-worker-manager",
       "@jupyterlite/javascript-kernel-extension:kernel-iframe"
     ]

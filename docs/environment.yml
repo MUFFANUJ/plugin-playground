@@ -6,6 +6,9 @@ channels:
 dependencies:
   - python=3.10
   - pip
+  - hatchling
+  - hatch-jupyter-builder
+  - hatch-nodejs-version
   - pydata-sphinx-theme
   - myst-parser
   - ipywidgets>=8.0,<9
@@ -21,6 +24,4 @@ dependencies:
   - nodejs>=22.12,<23
   - pip:
       - build
-      - git+https://github.com/MUFFANUJ/jupyterlab.git@providerRegistration
-      - git+https://github.com/MUFFANUJ/javascript-kernel.git@startupExtensions
       - jupyterlab-open-url-parameter>=0.4,<1
