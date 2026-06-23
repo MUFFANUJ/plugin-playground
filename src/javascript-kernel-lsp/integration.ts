@@ -9,11 +9,7 @@ import {
   type TSpecsMap
 } from '@jupyterlab/lsp';
 import type { Kernel } from '@jupyterlab/services';
-import {
-  javaScriptKernelStartupToken,
-  setupJavaScriptKernelVfs,
-  type IJavaScriptKernelStartupRegistry
-} from '../javascript-kernel-vfs/startup';
+import type { IJavaScriptKernelStartupRegistry } from '../javascript-kernel-vfs/startup';
 import {
   JAVASCRIPT_KERNEL_LSP_COMM_TARGET,
   JAVASCRIPT_KERNEL_LSP_LANGUAGES,
@@ -320,43 +316,58 @@ const javaScriptKernelLspCommsPlugin: JupyterFrontEndPlugin<void> = {
     'Routes JupyterLab LSP WebSocket traffic through JavaScript kernel comms in Lite deployments.',
   autoStart: true,
   requires: [ILSPDocumentConnectionManager],
-  optional: [javaScriptKernelStartupToken],
-  // eslint-disable-next-line jupyter/plugin-activation-args
   activate: (
     app: JupyterFrontEnd,
-    connectionManager: ILSPDocumentConnectionManager,
-    javaScriptKernelStartupToken: IJavaScriptKernelStartupRegistry | null
+    connectionManager: ILSPDocumentConnectionManager
   ): void => {
-    if (!javaScriptKernelStartupToken) {
-      return;
-    }
-
-    setupJavaScriptKernelVfs(javaScriptKernelStartupToken);
-
     const kernelspecManager = app.serviceManager.kernelspecs;
     let languageServerProviderRegistered = false;
+    let languageServerProviderRegistrationPending = false;
     const registerIfJavaScriptKernelSpecAvailable = (): boolean => {
       const kernelspecs = kernelspecManager.specs?.kernelspecs;
       if (!kernelspecs || !kernelspecs[JAVASCRIPT_PRIMARY_KERNEL_SPEC_NAME]) {
         return false;
       }
-      if (languageServerProviderRegistered) {
+      if (
+        languageServerProviderRegistered ||
+        languageServerProviderRegistrationPending
+      ) {
         return true;
       }
-      try {
-        const languageServerManager = (
-          connectionManager as unknown as {
-            languageServerManager: ILanguageServerManagerWithProviders;
+      languageServerProviderRegistrationPending = true;
+      void import('../javascript-kernel-vfs/startup')
+        .then(
+          async ({
+            javaScriptKernelStartupToken,
+            setupJavaScriptKernelVfs
+          }) => {
+            const startup =
+              await app.resolveOptionalService<IJavaScriptKernelStartupRegistry>(
+                javaScriptKernelStartupToken
+              );
+            if (!startup) {
+              throw new Error(
+                'The JavaScript kernel startup extension registry is unavailable.'
+              );
+            }
+
+            setupJavaScriptKernelVfs(startup);
+            const languageServerManager = (
+              connectionManager as unknown as {
+                languageServerManager: ILanguageServerManagerWithProviders;
+              }
+            ).languageServerManager;
+            registerKernelLspProvider(app, languageServerManager);
+            languageServerProviderRegistered = true;
           }
-        ).languageServerManager;
-        registerKernelLspProvider(app, languageServerManager);
-        languageServerProviderRegistered = true;
-      } catch (error) {
-        reportKernelLspError(
-          'Failed to register JavaScript kernel LSP provider.',
-          error
-        );
-      }
+        )
+        .catch(error => {
+          languageServerProviderRegistrationPending = false;
+          reportKernelLspError(
+            'Failed to register JavaScript kernel LSP provider.',
+            error
+          );
+        });
       return true;
     };
 
