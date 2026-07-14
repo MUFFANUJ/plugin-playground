@@ -6,7 +6,7 @@ build:
     python: "mambaforge-4.10"
   jobs:
     post_create_environment:
-      - python -m pip install --force-reinstall --no-deps --no-build-isolation -r docs/upstream-pr-requirements.txt
+      - python -m pip install --force-reinstall --no-deps --no-build-isolation jupyterlab==4.7.0a0 jupyterlite-javascript-kernel==0.4.0a5
 
 conda:
   environment: docs/environment.yml

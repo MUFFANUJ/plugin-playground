@@ -1,2 +1,0 @@
-git+https://github.com/MUFFANUJ/javascript-kernel.git@b45958cda2cd94210e4fcf655998c24e1aae09b8
-git+https://github.com/MUFFANUJ/jupyterlab.git@5ec1ebd8f3cde6cadc85de39e904c751d912e81c

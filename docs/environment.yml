@@ -18,10 +18,10 @@ dependencies:
   - jupyterlab-language-pack-fr-FR
   - jupyterlab-language-pack-zh-CN
   - jupyterlite-ai>=0.15,<1
-  - jupyterlite-core>=0.7.0,<0.8
+  - jupyterlite-core>=0.8.0,<0.9
   - jupyterlite-sphinx>=0.22.0,<0.23
-  - jupyterlite-pyodide-kernel>=0.7.0,<0.8
-  - nodejs>=22.12,<23
+  - jupyterlite-pyodide-kernel>=0.8.0,<0.9
+  - nodejs>=24,<25
   - pip:
       - build
       - jupyterlab-open-url-parameter>=0.4,<1

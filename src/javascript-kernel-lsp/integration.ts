@@ -41,6 +41,7 @@ interface ILanguageServerManagerWithProviders {
 }
 
 interface ILanguageServerProvider {
+  readonly id: string;
   fetch(): Promise<{
     sessions: TSessionMap;
     specs: TSpecsMap;
@@ -286,6 +287,7 @@ function registerKernelLspProvider(
   const KernelLspWebSocket = createKernelLspWebSocketClass(app);
 
   languageServerManager.registerProvider({
+    id: '@jupyterlab/plugin-playground:javascript-kernel-lsp-provider',
     fetch: async () => ({
       statusCode: 200,
       specs: new Map([[JAVASCRIPT_KERNEL_LSP_SERVER_ID, spec]]) as TSpecsMap,
@@ -351,12 +353,12 @@ const javaScriptKernelLspCommsPlugin: JupyterFrontEndPlugin<void> = {
               );
             }
 
-            setupJavaScriptKernelVfs(startup);
             const languageServerManager = (
               connectionManager as unknown as {
                 languageServerManager: ILanguageServerManagerWithProviders;
               }
             ).languageServerManager;
+            setupJavaScriptKernelVfs(startup);
             registerKernelLspProvider(app, languageServerManager);
             languageServerProviderRegistered = true;
           }
